@@ -1,0 +1,59 @@
+# seta_env env_service config for GLM-4.7-Flash via the miles SESSION SERVER.
+#
+# Mirrors seta_env_config_session_server.yaml (DeepSeek) but for GLM-4.7-Flash:
+# the model talks OpenAI-compat to the miles router session URL (overridden per /step),
+# SGLang parses GLM tool calls + reasoning engine-side, and the session server captures
+# TITO. No custom sglang_glm47_flash backend, no client-side parsing.
+
+terminal_env:
+  model:
+    # TITOChatModel branch (session server + TITO tracking), NOT sglang_glm47_flash.
+    model_platform: tito
+    tito_enabled: true
+    tito_validate: true
+    model_type: /data/models/GLM-4.7-Flash
+    url: http://localhost:30000        # placeholder; overridden per /step by the session URL
+    model_config_dict:
+      max_tokens: 8192                 # OpenAI-compat key
+      temperature: 1.0
+      top_p: 0.95
+      stream: false
+
+  agent:
+    agent: tito_train_agent
+    prompt: sys_prompt_base
+    # [debugging] one tool call per turn — simpler trajectories while bringing up the
+    # session-server path. Re-enable parallelism later once validated.
+    # parallel_internal_tools only controls concurrent vs sequential EXECUTION; it does
+    # NOT limit how many calls the model emits. max_parallel_tool_calls: 1 is the hard cap
+    # that actually enforces single-tool-call-per-turn (rest rejected with a stub result).
+    parallel_internal_tools: false
+    max_parallel_tool_calls: 1
+    # Hard-capped at 60000 (GLM-4.7-Flash original_max_position_embeddings headroom).
+    max_total_tokens: 60000
+    max_completion_tokens: 8192
+    max_iteration: 60                  # same as the DeepSeek-V4 run for the ablation
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+
+  runtime:
+    env_type: daytona
+    toolkit: auto
+    # Same per-sandbox caps as the DeepSeek run (MAX_SLOTS=160 budget):
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 10240   # tbench-tasks-migrated task.toml all specify storage_mb=10240
+
+  env:
+    reward_fn: binary
+    task_timeouts:
+      _reset_env: 720.0
+      _reset_agent: 120.0
+      agent_astep: 2400.0
+      _evaluate_completion_sync: 900.0
+      _cleanup: 120.0

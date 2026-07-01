@@ -1,0 +1,109 @@
+# Evolution Pipeline — Example Configuration
+#
+# Three independent stages: evolve → rollout → verify
+# Each stage can be run separately or together via:
+#
+#   python run_pipeline.py configs/config.example.yaml evolve
+#   python run_pipeline.py configs/config.example.yaml rollout
+#   python run_pipeline.py configs/config.example.yaml verify
+#   python run_pipeline.py configs/config.example.yaml all
+#   python run_pipeline.py configs/config.example.yaml rollout --dry-run
+#
+# Default pipeline: 125 selected seeds → 2 evolution rounds
+# (change_context → increase_difficulty) → kimi rollout (1 traj) → verify.
+#
+# Environment variables can be referenced as ${VAR_NAME}.
+# Relative paths are resolved against the pipeline root (evol_pipeline/).
+
+huggingface:
+  # On-demand download: tasks not in input_dir are fetched from input_repo.
+  # Set to null to disable (local-only mode, e.g. for chained runs).
+  input_repo: camel-ai/seta-env-v2
+  # Upload evolved tasks to this repo.
+  output_repo: camel-ai/seta-env-evol
+  token_env: HF_TOKEN
+
+# Top-level filter — applies to ALL stages at the root seed task_id level.
+# CSV with a single `task_id` column. Variant IDs (e.g. 402__b1__d1) are
+# matched by extracting the root (402) and checking against this list.
+filter_csv: filters/split_1_of_4.csv
+
+# ==========================================================================
+# Stage 1: Evolution (multi-round)
+# ==========================================================================
+# Rounds run sequentially. Each round's output can chain as the next
+# round's input — only PASS variants from the previous round are used.
+evolve:
+  n_workers: 4                                # parallel async workers (shared across rounds)
+  skip_timeout: false                         # skip previously timed-out tasks on resume
+  task_timeout_s: 3600                        # per-task timeout (seconds)
+  rounds:
+    # --- Round 1: change context (breadth) ---
+    - name: r1_change_context
+      input_dir: outputs/seeds                # original seed tasks
+      output_dir: outputs/evol_r1_breadth     # evolved variants written here
+      strategy:
+        evol_strategy: breadth                # "depth" or "breadth"
+        evol_target: CHANGE_CONTEXT           # CHANGE_CONTEXT | INCREASE_DIFFICULTY
+        max_variants: 1
+
+    # --- Round 2: increase difficulty (depth) ---
+    - name: r2_increase_difficulty
+      input_dir: outputs/evol_r1_breadth      # chains from round 1 PASS output
+      output_dir: outputs/evol_r2_depth
+      strategy:
+        evol_strategy: depth
+        evol_target: INCREASE_DIFFICULTY
+        max_variants: 1
+
+# ==========================================================================
+# Stage 2: Rollout (scans task folders, fills gaps)
+# ==========================================================================
+# Independently scans each tasks_dir for eligible tasks, checks for
+# existing rollout results, and runs agent trajectories on the gaps.
+# Works identically for seeds and evolved tasks.
+rollout:
+  n_workers: 4                                # parallel async rollout workers
+  n_trajs: 1                                  # trajectories per task per model
+  tasks_dirs:                                 # list of task folders to roll out
+    - outputs/evol_r1_breadth                 # → rollout_dir: outputs/evol_r1_breadth_rollout
+    - outputs/evol_r2_depth                   # → rollout_dir: outputs/evol_r2_depth_rollout
+    # Uncomment to also roll out raw seeds as a baseline:
+    # - outputs/seeds                         # → rollout_dir: outputs/seeds_rollout
+  models:
+    - model_config_name: kimi_k2              # subdirectory name (must be unique)
+      model_platform: moonshot                # moonshot | azure | sglang | openai
+      model_type: kimi-k2.5
+      api_key: ${MOONSHOT_API_KEY}
+      url: https://api.moonshot.ai/v1
+      tito_enabled: true
+      tito_validate: false
+      model_config_dict:
+        max_tokens: 4096
+        stream: false
+        temperature: 1.0
+    # Add more models to roll out with multiple agents:
+    # - model_config_name: azure_gpt54
+    #   model_platform: azure
+    #   model_type: gpt-5.4
+    #   model_config_dict:
+    #     max_completion_tokens: 4096
+    #     stream: false
+    #     temperature: 1.0
+  # Agent, runtime, and env settings are baked in — only model varies per config.
+
+# ==========================================================================
+# Stage 3: Verification (analyze rollout failures)
+# ==========================================================================
+# Scans rollout results for tasks below a pass-rate threshold and runs a
+# trajectory judge agent to classify failures as DESIGN_FLAW or TOO_HARD.
+verify:
+  tasks_dirs:                                 # which task folders to verify
+    - outputs/evol_r1_breadth                 # checks outputs/evol_r1_breadth_rollout
+    - outputs/evol_r2_depth                   # checks outputs/evol_r2_depth_rollout
+  model_config_name: kimi_k2                  # which model's rollouts to analyze
+  max_pass_rate: 0.0                          # 0.0 = only all-fail tasks
+
+upload:
+  enabled: false
+  interval_minutes: 30

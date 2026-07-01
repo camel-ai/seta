@@ -1,0 +1,43 @@
+# Unified dataset registry for seta_env.
+#
+# Each entry has:
+#   repo       — git URL (HuggingFace or GitHub)
+#   subfolder  — (optional) only download/use this subfolder from the repo
+#
+# Download strategy: git clone + git lfs pull first; if git-lfs is not
+# available (local machines without apt), fall back to HuggingFace API
+# (only works for huggingface.co URLs).
+
+datasets:
+  seta-env-harbor:
+    repo: "https://huggingface.co/datasets/camel-ai/seta-env-harbor"
+
+  tbench-tasks_migrated:
+    repo: "https://huggingface.co/datasets/camel-ai/tbench-tasks_migrated"
+
+  terminal-bench-2.0:
+    repo: "https://huggingface.co/datasets/camel-ai/terminal-bench-2.0"
+
+  terminal-bench-core_migrated:
+    repo: "https://huggingface.co/datasets/camel-ai/terminal-bench-core_migrated"
+
+  terminal-bench-core-0.1.1_migrated:
+    repo: "https://huggingface.co/datasets/camel-ai/terminal-bench-core-0.1.1_migrated"
+
+  seta-env-v2:
+    repo: "https://huggingface.co/datasets/camel-ai/seta-env-v2"
+
+  seta-env-final:
+    repo: "https://huggingface.co/datasets/camel-ai/seta-env-final"
+
+  seta-env-seed2synth-synth-nl2bash:
+    repo: "https://huggingface.co/datasets/camel-ai/seta-env-seed2synth-synth"
+    subfolder: "nl2bash"
+
+  seta-env-seed2synth-synth-stack_overflow:
+    repo: "https://huggingface.co/datasets/camel-ai/seta-env-seed2synth-synth"
+    subfolder: "stack_overflow"
+
+  seta-env-seed2synth-synth-unix_linux_se:
+    repo: "https://huggingface.co/datasets/camel-ai/seta-env-seed2synth-synth"
+    subfolder: "unix_linux_se"

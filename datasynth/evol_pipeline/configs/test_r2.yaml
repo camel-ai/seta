@@ -1,0 +1,63 @@
+# Test config: second round evolve + rollout on 12 tasks that finished first-round rollout.
+# Same as config.example.yaml except for the filter_csv.
+#
+# Usage:
+#   python run_evol_orchestrator.py configs/test_r2.yaml evolve    # only round 2
+#   python run_evol_orchestrator.py configs/test_r2.yaml rollout   # rollout r1 + r2
+#   python run_evol_orchestrator.py configs/test_r2.yaml           # all stages
+
+huggingface:
+  input_repo: camel-ai/seta-env-v2
+  output_repo: null
+  token_env: HF_TOKEN
+
+filter_csv: filters/rolled_out_r1.csv
+
+evolve:
+  n_workers: 4
+  skip_timeout: false
+  task_timeout_s: 3600
+  rounds:
+    - name: r1_change_context
+      input_dir: outputs/seeds
+      output_dir: outputs/evol_r1_breadth
+      strategy:
+        evol_strategy: breadth
+        evol_target: CHANGE_CONTEXT
+        max_variants: 1
+    - name: r2_increase_difficulty
+      input_dir: outputs/evol_r1_breadth
+      output_dir: outputs/evol_r2_depth
+      strategy:
+        evol_strategy: depth
+        evol_target: INCREASE_DIFFICULTY
+        max_variants: 1
+
+rollout:
+  n_workers: 4
+  n_trajs: 1
+  tasks_dirs:
+    - outputs/evol_r1_breadth
+    - outputs/evol_r2_depth
+  models:
+    - model_config_name: kimi_k2
+      model_platform: moonshot
+      model_type: kimi-k2.5
+      api_key: ${MOONSHOT_API_KEY}
+      url: https://api.moonshot.ai/v1
+      tito_enabled: true
+      tito_validate: false
+      model_config_dict:
+        max_tokens: 4096
+        stream: false
+        temperature: 1.0
+
+verify:
+  tasks_dirs:
+    - outputs/evol_r1_breadth
+    - outputs/evol_r2_depth
+  model_config_name: kimi_k2
+  max_pass_rate: 0.0
+
+upload:
+  enabled: false

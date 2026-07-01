@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaskManager Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+    --text: #e0e0e0; --muted: #888; --accent: #6c8cff;
+    --zpd: #4ecdc4; --uncertain: #ffe66d; --mastered: #45b7d1;
+    --too-hard: #ff6b6b; --broken: #c44dff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); padding: 16px; }
+  h1 { font-size: 18px; margin-bottom: 8px; color: var(--accent); }
+  .header { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .header .badge { font-size: 12px; padding: 3px 10px; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); }
+  .header .badge.live { color: #4ecdc4; border-color: #4ecdc4; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .panel h2 { font-size: 13px; color: var(--muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .panel.full { grid-column: 1 / -1; }
+  .metrics-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .metric { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 140px; }
+  .metric .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .metric .value { font-size: 22px; font-weight: bold; margin-top: 2px; }
+  .metric .value.green { color: #4ecdc4; }
+  .metric .value.red { color: #ff6b6b; }
+  .metric .value.blue { color: #45b7d1; }
+  canvas { max-height: 260px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); cursor: pointer; user-select: none; font-size: 11px; text-transform: uppercase; }
+  th:hover { color: var(--text); }
+  tr.stale td { opacity: 0.5; }
+  .cat-badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; }
+  .cat-zpd { background: rgba(78,205,196,0.2); color: var(--zpd); }
+  .cat-uncertain { background: rgba(255,230,109,0.2); color: var(--uncertain); }
+  .cat-mastered { background: rgba(69,183,209,0.2); color: var(--mastered); }
+  .cat-too_hard { background: rgba(255,107,107,0.2); color: var(--too-hard); }
+  .cat-broken { background: rgba(196,77,255,0.2); color: var(--broken); }
+  .transition-log { max-height: 200px; overflow-y: auto; font-size: 12px; }
+  .transition-log .entry { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .transition-log .time { color: var(--muted); margin-right: 8px; }
+  .filter-bar { margin-bottom: 8px; }
+  .filter-bar select { background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; border-radius: 4px; font-family: inherit; }
+  #error-banner { display: none; background: rgba(255,107,107,0.15); border: 1px solid var(--too-hard); color: var(--too-hard); padding: 8px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>TaskManager Dashboard</h1>
+  <span class="badge live" id="status-badge">connecting...</span>
+  <span class="badge" id="phase-badge">--</span>
+  <span class="badge" id="uptime-badge">--</span>
+</div>
+<div id="error-banner"></div>
+
+<div class="metrics-row">
+  <div class="metric"><div class="label">Total Tasks</div><div class="value blue" id="m-tasks">--</div></div>
+  <div class="metric"><div class="label">Pulls</div><div class="value" id="m-pulls">--</div></div>
+  <div class="metric"><div class="label">Pushes</div><div class="value" id="m-pushes">--</div></div>
+  <div class="metric"><div class="label">Trajectories</div><div class="value" id="m-trajs">--</div></div>
+  <div class="metric"><div class="label">Errors</div><div class="value red" id="m-errors">--</div></div>
+  <div class="metric"><div class="label">Error Rate</div><div class="value" id="m-erate">--</div></div>
+  <div class="metric"><div class="label">Pulls/min</div><div class="value green" id="m-ppm">--</div></div>
+  <div class="metric"><div class="label">Pushes/min</div><div class="value green" id="m-pshpm">--</div></div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Category Distribution Over Time</h2>
+    <canvas id="chart-categories"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Throughput</h2>
+    <canvas id="chart-throughput"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Error Tracking</h2>
+    <canvas id="chart-errors"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Curriculum Health</h2>
+    <canvas id="chart-health"></canvas>
+  </div>
+  <div class="panel full">
+    <h2>Recent Transitions</h2>
+    <div class="transition-log" id="transition-log"></div>
+  </div>
+  <div class="panel full">
+    <h2>Per-Task Table</h2>
+    <div class="filter-bar">
+      <select id="cat-filter">
+        <option value="all">All categories</option>
+        <option value="zpd">zpd</option>
+        <option value="uncertain">uncertain</option>
+        <option value="mastered">mastered</option>
+        <option value="too_hard">too_hard</option>
+        <option value="broken">broken</option>
+      </select>
+    </div>
+    <div style="max-height:400px;overflow-y:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th data-col="task_id">Task ID</th>
+          <th data-col="category">Category</th>
+          <th data-col="recent_pass_at_n">Pass@N</th>
+          <th data-col="recent_mean_score">Mean Score</th>
+          <th data-col="recent_variance">Variance</th>
+          <th data-col="n_groups">Groups</th>
+          <th data-col="n_trajectories">Trajs</th>
+          <th data-col="n_errors">Errors</th>
+          <th data-col="last_push_time">Last Push</th>
+        </tr>
+      </thead>
+      <tbody id="task-tbody"></tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const POLL_INTERVAL = 30000;
+const MAX_LOCAL_POINTS = 600; // ~5 hours at 30s intervals
+
+// Local time-series for charts that need accumulation
+let throughputHistory = [];
+let errorHistory = [];
+let healthHistory = [];
+
+// Chart instances
+let chartCat, chartThroughput, chartErrors, chartHealth;
+
+// Table sort state
+let sortCol = 'task_id', sortAsc = true;
+let lastStats = null;
+
+function fmtTime(ts) {
+  if (!ts) return '--';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString();
+}
+
+function fmtDuration(sec) {
+  if (sec < 60) return Math.round(sec) + 's';
+  if (sec < 3600) return Math.round(sec / 60) + 'm';
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return h + 'h ' + m + 'm';
+}
+
+function fmtNum(n) {
+  if (n == null) return '--';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
+function initCharts() {
+  const gridColor = 'rgba(255,255,255,0.06)';
+  const commonScales = {
+    x: { type: 'category', ticks: { color: '#888', maxTicksLimit: 8, font: { size: 10 } }, grid: { color: gridColor } },
+    y: { ticks: { color: '#888', font: { size: 10 } }, grid: { color: gridColor }, beginAtZero: true }
+  };
+  const commonOpts = { responsive: true, maintainAspectRatio: true, animation: { duration: 300 },
+    plugins: { legend: { labels: { color: '#ccc', font: { size: 11 } } } } };
+
+  chartCat = new Chart(document.getElementById('chart-categories'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'zpd', data: [], borderColor: '#4ecdc4', backgroundColor: 'rgba(78,205,196,0.15)', fill: true, tension: 0.3, pointRadius: 0 },
+      { label: 'uncertain', data: [], borderColor: '#ffe66d', backgroundColor: 'rgba(255,230,109,0.15)', fill: true, tension: 0.3, pointRadius: 0 },
+      { label: 'mastered', data: [], borderColor: '#45b7d1', backgroundColor: 'rgba(69,183,209,0.15)', fill: true, tension: 0.3, pointRadius: 0 },
+      { label: 'too_hard', data: [], borderColor: '#ff6b6b', backgroundColor: 'rgba(255,107,107,0.15)', fill: true, tension: 0.3, pointRadius: 0 },
+      { label: 'broken', data: [], borderColor: '#c44dff', backgroundColor: 'rgba(196,77,255,0.15)', fill: true, tension: 0.3, pointRadius: 0 },
+    ]},
+    options: { ...commonOpts, scales: { ...commonScales, y: { ...commonScales.y, stacked: true } } }
+  });
+
+  chartThroughput = new Chart(document.getElementById('chart-throughput'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'pulls/min', data: [], borderColor: '#4ecdc4', tension: 0.3, pointRadius: 0 },
+      { label: 'pushes/min', data: [], borderColor: '#45b7d1', tension: 0.3, pointRadius: 0 },
+    ]},
+    options: { ...commonOpts, scales: commonScales }
+  });
+
+  chartErrors = new Chart(document.getElementById('chart-errors'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'error rate', data: [], borderColor: '#ff6b6b', tension: 0.3, pointRadius: 0 },
+      { label: 'total errors', data: [], borderColor: '#c44dff', tension: 0.3, pointRadius: 0, yAxisID: 'y1' },
+    ]},
+    options: { ...commonOpts, scales: {
+      ...commonScales,
+      y: { ...commonScales.y, position: 'left', title: { display: true, text: 'rate', color: '#888' } },
+      y1: { ticks: { color: '#888', font: { size: 10 } }, grid: { drawOnChartArea: false }, position: 'right', beginAtZero: true, title: { display: true, text: 'cumulative', color: '#888' } }
+    }}
+  });
+
+  chartHealth = new Chart(document.getElementById('chart-health'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'mean pass@n', data: [], borderColor: '#4ecdc4', tension: 0.3, pointRadius: 0 },
+      { label: 'mean score', data: [], borderColor: '#ffe66d', tension: 0.3, pointRadius: 0 },
+    ]},
+    options: { ...commonOpts, scales: { ...commonScales, y: { ...commonScales.y, max: 1.0 } } }
+  });
+}
+
+function updateMetrics(data) {
+  const m = data.metrics;
+  document.getElementById('m-tasks').textContent = data.n_tasks;
+  document.getElementById('m-pulls').textContent = fmtNum(m.total_pulls);
+  document.getElementById('m-pushes').textContent = fmtNum(m.total_pushes);
+  document.getElementById('m-trajs').textContent = fmtNum(m.total_trajectories);
+  document.getElementById('m-errors').textContent = fmtNum(m.total_errors);
+  document.getElementById('m-erate').textContent = (m.error_rate * 100).toFixed(2) + '%';
+  document.getElementById('m-ppm').textContent = m.pulls_per_minute.toFixed(1);
+  document.getElementById('m-pshpm').textContent = m.pushes_per_minute.toFixed(1);
+  document.getElementById('phase-badge').textContent = data.phase;
+  document.getElementById('uptime-badge').textContent = fmtDuration(m.uptime_seconds);
+}
+
+function updateCategoryChart(data) {
+  const hist = data.category_history || [];
+  // Use server-side history — take last 200 points for readability
+  const slice = hist.slice(-200);
+  const labels = slice.map(e => fmtTime(e[0]));
+  const cats = ['zpd', 'uncertain', 'mastered', 'too_hard', 'broken'];
+  chartCat.data.labels = labels;
+  cats.forEach((cat, i) => {
+    chartCat.data.datasets[i].data = slice.map(e => e[1][cat] || 0);
+  });
+  chartCat.update();
+}
+
+function updateThroughputChart(data) {
+  const now = new Date();
+  throughputHistory.push({ time: now.toLocaleTimeString(), pulls: data.metrics.pulls_per_minute, pushes: data.metrics.pushes_per_minute });
+  if (throughputHistory.length > MAX_LOCAL_POINTS) throughputHistory.shift();
+  chartThroughput.data.labels = throughputHistory.map(e => e.time);
+  chartThroughput.data.datasets[0].data = throughputHistory.map(e => e.pulls);
+  chartThroughput.data.datasets[1].data = throughputHistory.map(e => e.pushes);
+  chartThroughput.update();
+}
+
+function updateErrorChart(data) {
+  const now = new Date();
+  errorHistory.push({ time: now.toLocaleTimeString(), rate: data.metrics.error_rate, total: data.metrics.total_errors });
+  if (errorHistory.length > MAX_LOCAL_POINTS) errorHistory.shift();
+  chartErrors.data.labels = errorHistory.map(e => e.time);
+  chartErrors.data.datasets[0].data = errorHistory.map(e => e.rate);
+  chartErrors.data.datasets[1].data = errorHistory.map(e => e.total);
+  chartErrors.update();
+}
+
+function updateHealthChart(data) {
+  const tasks = Object.values(data.tasks || {});
+  const activeTasks = tasks.filter(t => t.category !== 'broken' && t.n_groups > 0);
+  let meanPassN = 0, meanScore = 0;
+  if (activeTasks.length > 0) {
+    meanPassN = activeTasks.reduce((s, t) => s + t.recent_pass_at_n, 0) / activeTasks.length;
+    meanScore = activeTasks.reduce((s, t) => s + t.recent_mean_score, 0) / activeTasks.length;
+  }
+  const now = new Date();
+  healthHistory.push({ time: now.toLocaleTimeString(), passN: meanPassN, score: meanScore });
+  if (healthHistory.length > MAX_LOCAL_POINTS) healthHistory.shift();
+  chartHealth.data.labels = healthHistory.map(e => e.time);
+  chartHealth.data.datasets[0].data = healthHistory.map(e => e.passN);
+  chartHealth.data.datasets[1].data = healthHistory.map(e => e.score);
+  chartHealth.update();
+}
+
+function updateTransitions(data) {
+  const log = document.getElementById('transition-log');
+  const trans = (data.recent_transitions || []).slice(-50).reverse();
+  log.innerHTML = trans.map(t =>
+    `<div class="entry"><span class="time">${fmtTime(t.timestamp)}</span>` +
+    `<strong>${t.task_id}</strong> ` +
+    `<span class="cat-badge cat-${t.old}">${t.old || '?'}</span> &rarr; ` +
+    `<span class="cat-badge cat-${t.new}">${t.new}</span> ` +
+    `<span style="color:var(--muted)">(${t.trigger})</span></div>`
+  ).join('');
+}
+
+function updateTable(data) {
+  const filter = document.getElementById('cat-filter').value;
+  const nowSec = Date.now() / 1000;
+  let rows = Object.entries(data.tasks || {}).map(([id, t]) => ({ task_id: id, ...t }));
+  if (filter !== 'all') rows = rows.filter(r => r.category === filter);
+
+  // Sort
+  rows.sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); }
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+
+  const tbody = document.getElementById('task-tbody');
+  tbody.innerHTML = rows.map(r => {
+    const stale = r.last_push_time > 0 && (nowSec - r.last_push_time) > 600;
+    return `<tr class="${stale ? 'stale' : ''}">
+      <td>${r.task_id}</td>
+      <td><span class="cat-badge cat-${r.category}">${r.category}</span></td>
+      <td>${r.recent_pass_at_n.toFixed(3)}</td>
+      <td>${r.recent_mean_score.toFixed(3)}</td>
+      <td>${r.recent_variance.toFixed(4)}</td>
+      <td>${r.n_groups}</td>
+      <td>${r.n_trajectories}</td>
+      <td>${r.n_errors}</td>
+      <td>${r.last_push_time > 0 ? fmtTime(r.last_push_time) : '--'}${stale ? ' (stale)' : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function fetchStats() {
+  const banner = document.getElementById('error-banner');
+  const badge = document.getElementById('status-badge');
+  try {
+    const resp = await fetch('/stats');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    lastStats = data;
+    banner.style.display = 'none';
+    badge.textContent = 'live';
+    badge.classList.add('live');
+
+    updateMetrics(data);
+    updateCategoryChart(data);
+    updateThroughputChart(data);
+    updateErrorChart(data);
+    updateHealthChart(data);
+    updateTransitions(data);
+    updateTable(data);
+  } catch (err) {
+    banner.textContent = 'Failed to fetch /stats: ' + err.message;
+    banner.style.display = 'block';
+    badge.textContent = 'disconnected';
+    badge.classList.remove('live');
+  }
+}
+
+// Table sort click handlers
+document.querySelectorAll('th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = true; }
+    if (lastStats) updateTable(lastStats);
+  });
+});
+
+// Filter change
+document.getElementById('cat-filter').addEventListener('change', () => {
+  if (lastStats) updateTable(lastStats);
+});
+
+// Init
+initCharts();
+fetchStats();
+setInterval(fetchStats, POLL_INTERVAL);
+</script>
+</body>
+</html>
