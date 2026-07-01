@@ -184,7 +184,7 @@ Values must sum to **1.0**.
 ## Harbor Run Commands
 
 ```bash
-harbor run --agent empty -p <task-dir> -o <harbor-out> --no-delete
+harbor run --agent nop -p <task-dir> -o <harbor-out> --no-delete
 harbor run --agent oracle -p <task-dir> -o <harbor-out> --no-delete [--no-force-build]
 ```
 
@@ -192,11 +192,41 @@ harbor run --agent oracle -p <task-dir> -o <harbor-out> --no-delete [--no-force-
 - Pass `--no-force-build` when Dockerfile hasn't changed
 - Aim for at most 3 `harbor run` calls total
 
+### Checking results: always read `verifier/ctrf.json`
+
+**Do NOT rely solely on `reward.txt`.** Reward is binary (1 = all pass, 0 = any fail), so `reward=0` hides partial success. After every `harbor run`, read the CTRF JSON report for per-test pass/fail:
+
+```
+<harbor-out>/<run-dir>/verifier/ctrf.json
+```
+
+The file has this structure:
+```json
+{
+  "results": {
+    "summary": {"tests": 9, "passed": 7, "failed": 2},
+    "tests": [
+      {"name": "test_outputs.py::test_name", "status": "passed"},
+      {"name": "test_outputs.py::test_other", "status": "failed",
+       "trace": "AssertionError: /results/foo.csv does not exist"}
+    ]
+  }
+}
+```
+
+Use this to:
+1. See **exactly** which tests passed and which failed (not just the binary reward)
+2. Read the `trace` field for each failing test to understand **why** it failed
+3. Fix only what's broken — don't rewrite everything because reward=0
+4. Confirm the empty agent (`--agent nop`) gets **all tests failing** (0 passed) — if any test passes on empty, it's vacuous and must be rewritten
+
 ---
 
 ## Self-Review (required before declaring done)
 
-After oracle passes and empty fails, check all **7 criteria** (6 standard + evolution fidelity). Fix any FAILs, re-run harbor if needed, then write `judge_report.md`.
+After oracle passes and empty fails, check all **7 criteria** (6 standard + evolution fidelity). Fix any FAILs, re-run harbor if needed, then write `judge_report.md`. Always verify via `verifier/ctrf.json`:
+- **Oracle run**: all tests passed (not just reward=1)
+- **Empty run (`--agent nop`)**: all tests failed, 0 passed (any test that passes on empty is vacuous)
 
 ### 1. File Completeness
 All required files exist.

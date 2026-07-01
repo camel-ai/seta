@@ -1,0 +1,61 @@
+# Full seta-env-final corpus, 'difficult' bucket (per_task_summary.csv: task_difficulty == 'difficult', not yet evolved).
+# 1 round SLIGHT_DECREASE evolution.
+huggingface:
+  input_repo: camel-ai/seta-env-final
+  output_repo: null
+  token_env: HF_TOKEN
+
+filter_csv: filters/seta_final_need_hard.csv
+
+evolve:
+  n_workers: 4
+  skip_timeout: false
+  task_timeout_s: 3600
+  rounds:
+    - name: r1_hard_slight_decrease
+      input_dir: ../../dataset/seta-env-final
+      output_dir: outputs/evol_seta_final_hard_decrease
+      strategy:
+        evol_strategy: depth
+        evol_target: SLIGHT_DECREASE
+        max_variants: 1
+
+rollout:
+  n_workers: 2
+  n_trajs: 8
+  tasks_dirs:
+    - outputs/evol_seta_final_hard_decrease
+  models:
+    - model_config_name: qwen3_8b
+      model_platform: sglang
+      model_type: Qwen/Qwen3-8B
+      url: https://kyavexgjqrl4zw-8761.proxy.runpod.net/v1
+      api_key: "EMPTY"
+      tito_enabled: true
+      tito_validate: false
+      model_config_dict:
+        max_tokens: 4096
+        stream: false
+        extra_body:
+          enable_thinking: false
+    - model_config_name: qwen3_30b
+      model_platform: sglang
+      model_type: Qwen/Qwen3-30B-A3B
+      url: https://0fs1spiq1n47iz-8761.proxy.runpod.net/v1
+      api_key: "EMPTY"
+      tito_enabled: true
+      tito_validate: false
+      model_config_dict:
+        max_tokens: 4096
+        stream: false
+        extra_body:
+          enable_thinking: false
+
+verify:
+  tasks_dirs:
+    - outputs/evol_seta_final_hard_decrease
+  model_config_name: qwen3_8b
+  max_pass_rate: 0.0
+
+upload:
+  enabled: false
