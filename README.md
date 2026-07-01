@@ -5,10 +5,9 @@
 
 ***Designing resilient toolkits and scalable RL environments for CAMEL terminal agents***
 
-----
-
-
 [![🤗 Dataset](https://img.shields.io/badge/🤗%20Dataset-camel--ai%2FSETA--Env-yellow)](https://huggingface.co/datasets/camel-ai/SETA-Env)
+
+----
 
 ## Installation
 
