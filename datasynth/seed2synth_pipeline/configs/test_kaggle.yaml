@@ -1,0 +1,39 @@
+# Test Configuration for Kaggle Notebooks
+# Uses outputs/ folder as root for all data
+
+huggingface:
+  seed_repo: camel-ai/seta-env-seed2synth-seed
+  synth_repo: camel-ai/seta-env-seed2synth-synth
+  token_env: HF_TOKEN
+
+paths:
+  seed_data_dir: outputs/seed_data
+  synth_data_dir: outputs/synth_data
+  rollout_dir: outputs/synth_data_rollouts
+
+sources:
+  - kaggle_notebook
+
+# Filter to test first 2 tasks only
+filter_csv: configs/filters/test_kaggle_2tasks.csv
+
+seed_preparation:
+  download_all_upfront: true
+
+pipeline:
+  n_synth_workers: 1
+  stage: idea-only
+  skip_timeout: false
+
+rollout:
+  enabled: false
+  n_rollout_workers: 1
+  n_trajs: 1
+  model_url: "${SGLANG_URL}"
+  model_config_name: Qwen3-8B_thinking
+  model_name: null
+  thinking: false
+
+upload:
+  enabled: false
+  interval_minutes: 30

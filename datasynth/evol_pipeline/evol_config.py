@@ -104,12 +104,13 @@ ROLLOUT_AGENT_CONFIG: Dict[str, Any] = {
     "prompt": "sys_prompt_base",
     "max_total_tokens": 28672,
     "max_completion_tokens": 4096,
-    "max_iteration": 200,
+    "max_iteration": 30,
     "tool_names": [
         "shell_exec", "shell_view", "shell_wait",
         "shell_write_to_process", "shell_kill_process",
         "shell_write_content_to_file",
     ],
+    "thinking": False,
 }
 
 ROLLOUT_RUNTIME_CONFIG: Dict[str, Any] = {
@@ -367,6 +368,7 @@ def validate_config(config: Config) -> List[str]:
 
     # -- evolve rounds ------------------------------------------------------
     valid_targets = {"INCREASE_DIFFICULTY", "DECREASE_DIFFICULTY",
+                     "SLIGHT_INCREASE", "SLIGHT_DECREASE",
                      "CHANGE_CONTEXT", "INCREASE_DIFFICULTY_AND_CHANGE_CONTEXT"}
     valid_strategies = {"depth", "breadth"}
 

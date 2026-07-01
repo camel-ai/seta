@@ -1,0 +1,44 @@
+# Example Seed2Synth configuration file
+# Copy to config.yaml and customize for your setup
+
+huggingface:
+  seed_repo: camel-ai/seta-env-seed2synth-seed
+  synth_repo: camel-ai/seta-env-seed2synth-synth
+  token_env: HF_TOKEN
+
+paths:
+  seed_data_dir: outputs/seed_data
+  synth_data_dir: outputs/synth_data
+  rollout_dir: outputs/synth_data_rollouts
+
+sources:
+  - unix_linux_se
+  - stack_overflow
+  - kaggle_notebook
+
+# Optional: filter CSV to specify which task_ids to process
+# Format: source,task_id (CSV with header)
+# If omitted or null, all non-filtered tasks are eligible
+filter_csv: null
+
+seed_preparation:
+  # Download all seed data before synthesis starts (vs. on-demand)
+  download_all_upfront: false
+
+pipeline:
+  n_synth_workers: 3
+  stage: full          # full | idea-only | unified
+  skip_timeout: false  # re-queue timeout tasks
+
+rollout:
+  enabled: true
+  n_rollout_workers: 2
+  n_trajs: 8
+  model_url: "${SGLANG_URL}"  # can use env vars with ${VAR_NAME}
+  model_config_name: Qwen3-8B_thinking
+  model_name: null    # null = auto-detect from /v1/models
+  thinking: false
+
+upload:
+  enabled: false       # upload done+pass tasks to HF periodically
+  interval_minutes: 30

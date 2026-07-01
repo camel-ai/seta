@@ -235,9 +235,8 @@ async def _evol_worker(
 
         task_id = item["task_id"]
         input_task_path = item["input_task_path"]
-        is_probe = await gate.acquire(worker_id)
 
-        # On-demand download
+        # On-demand download (before gate so it doesn't retry on rate-limit)
         if not os.path.isdir(input_task_path):
             if config.huggingface.input_repo:
                 logger.info("[W%d] Downloading %s from HF...", worker_id, task_id)
@@ -265,40 +264,50 @@ async def _evol_worker(
             )
             write_synth_info(output_dir, vid, info)
 
-        # Run pipeline
-        t0 = time.monotonic()
-        try:
-            synth_results = await asyncio.wait_for(
-                pipeline.run(task_id, input_task_path, evol_opt),
-                timeout=config.evolve.task_timeout_s,
-            )
-        except asyncio.TimeoutError:
-            elapsed = time.monotonic() - t0
-            logger.warning("[W%d] %s timed out after %.0fs", worker_id, task_id, elapsed)
-            for vid in variant_ids:
-                _update_synth_info(output_dir, vid, task_id, rnd,
-                                   status="timeout", total_evol_time_s=elapsed)
-            if is_probe:
-                await gate.probe_success(worker_id)  # not a rate-limit issue
-            results.append((task_id, None))
-            queue.task_done()
-            continue
-        except ClaudeRateLimitError:
-            await gate.trigger(worker_id)
-            await queue.put(item)
-            queue.task_done()
-            continue
-        except Exception as e:
-            elapsed = time.monotonic() - t0
-            logger.error("[W%d] %s failed: %s", worker_id, task_id, e, exc_info=True)
-            for vid in variant_ids:
-                _update_synth_info(output_dir, vid, task_id, rnd,
-                                   status="error", total_evol_time_s=elapsed,
-                                   error=str(e))
-            if is_probe:
-                await gate.probe_success(worker_id)  # not a rate-limit issue
-            results.append((task_id, None))
-            queue.task_done()
+        # Retry loop for rate-limit: retry the SAME item in place instead of
+        # re-queueing past the sentinels (which would orphan it).
+        synth_results = None
+        task_done_cleanly = False
+        while not task_done_cleanly:
+            is_probe = await gate.acquire(worker_id)
+            t0 = time.monotonic()
+            try:
+                synth_results = await asyncio.wait_for(
+                    pipeline.run(task_id, input_task_path, evol_opt),
+                    timeout=config.evolve.task_timeout_s,
+                )
+                task_done_cleanly = True
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - t0
+                logger.warning("[W%d] %s timed out after %.0fs", worker_id, task_id, elapsed)
+                for vid in variant_ids:
+                    _update_synth_info(output_dir, vid, task_id, rnd,
+                                       status="timeout", total_evol_time_s=elapsed)
+                if is_probe:
+                    await gate.probe_success(worker_id)  # not a rate-limit issue
+                results.append((task_id, None))
+                queue.task_done()
+                break
+            except ClaudeRateLimitError:
+                # Gate-trigger makes acquire() block until probe succeeds on
+                # some worker. Loop continues, acquire() will block, then retry.
+                await gate.trigger(worker_id)
+                continue
+            except Exception as e:
+                elapsed = time.monotonic() - t0
+                logger.error("[W%d] %s failed: %s", worker_id, task_id, e, exc_info=True)
+                for vid in variant_ids:
+                    _update_synth_info(output_dir, vid, task_id, rnd,
+                                       status="error", total_evol_time_s=elapsed,
+                                       error=str(e))
+                if is_probe:
+                    await gate.probe_success(worker_id)  # not a rate-limit issue
+                results.append((task_id, None))
+                queue.task_done()
+                break
+
+        if not task_done_cleanly:
+            # broke out due to timeout/error; already handled
             continue
 
         if is_probe:
@@ -619,40 +628,47 @@ class EvolOrchestrator:
     # --- Rollout ----------------------------------------------------------
 
     async def run_rollout(self) -> dict:
-        """Run rollout for all tasks_dirs × models."""
+        """Run rollout for all tasks_dirs × models.
+
+        For each tasks_dir, all models run CONCURRENTLY (one pool per model).
+        tasks_dirs themselves are processed sequentially.
+        """
         rollout_cfg = self.config.rollout
         if not rollout_cfg.tasks_dirs or not rollout_cfg.models:
             logger.info("[rollout] No tasks_dirs or models configured.")
             return {}
 
+        async def drain_one(tasks_dir: str, rd: str, model_cfg) -> tuple[str, list]:
+            key = f"{os.path.basename(tasks_dir)}/{model_cfg.model_config_name}"
+            gaps = find_rollout_gaps(
+                tasks_dir, rd, model_cfg.model_config_name, self._filter_ids,
+            )
+            if not gaps:
+                logger.info("[rollout] %s: no gaps.", key)
+                return key, []
+            logger.info("[rollout] %s: %d task(s) queued.", key, len(gaps))
+            q: asyncio.Queue = asyncio.Queue()
+            for g in gaps:
+                await q.put(g)
+            for _ in range(rollout_cfg.n_workers):
+                await q.put(None)
+            batch: list = []
+            workers = [
+                _rollout_worker(j, q, batch, model_cfg, rd, rollout_cfg.n_trajs)
+                for j in range(rollout_cfg.n_workers)
+            ]
+            await asyncio.gather(*workers)
+            return key, batch
+
         results: dict = {}
         for tasks_dir in rollout_cfg.tasks_dirs:
             rd = rollout_dir_for(tasks_dir)
-            for model_cfg in rollout_cfg.models:
-                key = f"{os.path.basename(tasks_dir)}/{model_cfg.model_config_name}"
-                gaps = find_rollout_gaps(
-                    tasks_dir, rd, model_cfg.model_config_name, self._filter_ids,
-                )
-                if not gaps:
-                    logger.info("[rollout] %s: no gaps.", key)
-                    results[key] = []
-                    continue
-
-                logger.info("[rollout] %s: %d task(s) queued.", key, len(gaps))
-                q: asyncio.Queue = asyncio.Queue()
-                for g in gaps:
-                    await q.put(g)
-                for _ in range(rollout_cfg.n_workers):
-                    await q.put(None)
-
-                batch: list = []
-                workers = [
-                    _rollout_worker(j, q, batch, model_cfg, rd, rollout_cfg.n_trajs)
-                    for j in range(rollout_cfg.n_workers)
-                ]
-                await asyncio.gather(*workers)
+            # All models for this tasks_dir run concurrently
+            pair_results = await asyncio.gather(*[
+                drain_one(tasks_dir, rd, m) for m in rollout_cfg.models
+            ])
+            for key, batch in pair_results:
                 results[key] = batch
-
         return results
 
     # --- Verify -----------------------------------------------------------
@@ -752,36 +768,40 @@ class EvolOrchestrator:
         if not rollout_cfg.tasks_dirs or not rollout_cfg.models:
             return
 
-        already_queued: set = set()
+        async def drain(tasks_dir: str, rd: str, model_cfg) -> None:
+            # Source of truth is disk state via find_rollout_gaps — errored
+            # tasks stay as gaps and get retried on the next tick. Ticks
+            # cannot overlap (the while-loop awaits gather), so there is no
+            # risk of double-enqueueing the same task.
+            key = f"{os.path.basename(tasks_dir)}/{model_cfg.model_config_name}"
+            gaps = find_rollout_gaps(
+                tasks_dir, rd, model_cfg.model_config_name, self._filter_ids,
+            )
+            if not gaps:
+                return
+            logger.info("[rollout_poller] %d task(s) to roll out for %s", len(gaps), key)
+            q: asyncio.Queue = asyncio.Queue()
+            for g in gaps:
+                await q.put(g)
+            for _ in range(rollout_cfg.n_workers):
+                await q.put(None)
+            batch: list = []
+            workers = [
+                _rollout_worker(j, q, batch, model_cfg, rd, rollout_cfg.n_trajs)
+                for j in range(rollout_cfg.n_workers)
+            ]
+            await asyncio.gather(*workers)
+            results.setdefault(key, []).extend(batch)
+
         while True:
             await asyncio.sleep(poll_interval)
-            for tasks_dir in rollout_cfg.tasks_dirs:
-                rd = rollout_dir_for(tasks_dir)
-                for model_cfg in rollout_cfg.models:
-                    gaps = find_rollout_gaps(
-                        tasks_dir, rd, model_cfg.model_config_name, self._filter_ids,
-                    )
-                    new_gaps = [g for g in gaps if g["task_id"] not in already_queued]
-                    if not new_gaps:
-                        continue
-
-                    key = f"{os.path.basename(tasks_dir)}/{model_cfg.model_config_name}"
-                    logger.info("[rollout_poller] %d new task(s) for %s", len(new_gaps), key)
-
-                    q: asyncio.Queue = asyncio.Queue()
-                    for g in new_gaps:
-                        await q.put(g)
-                        already_queued.add(g["task_id"])
-                    for _ in range(rollout_cfg.n_workers):
-                        await q.put(None)
-
-                    batch: list = []
-                    workers = [
-                        _rollout_worker(j, q, batch, model_cfg, rd, rollout_cfg.n_trajs)
-                        for j in range(rollout_cfg.n_workers)
-                    ]
-                    await asyncio.gather(*workers)
-                    results.setdefault(key, []).extend(batch)
+            # Drain every (tasks_dir, model) pair concurrently so one model
+            # with a long backlog can't starve another.
+            await asyncio.gather(*[
+                drain(tasks_dir, rollout_dir_for(tasks_dir), m)
+                for tasks_dir in rollout_cfg.tasks_dirs
+                for m in rollout_cfg.models
+            ])
 
     async def _verify_poller(self, results: dict, poll_interval: int = 60) -> None:
         """Poll for completed rollouts needing verification. Runs as background task.

@@ -1,0 +1,30 @@
+# Kaggle-only base config for splitting tasks
+
+huggingface:
+  seed_repo: camel-ai/seta-env-seed2synth-seed
+  synth_repo: camel-ai/seta-env-seed2synth-synth
+  token_env: HF_TOKEN
+
+paths:
+  seed_data_dir: outputs/seed_data
+  synth_data_dir: outputs/synth_data
+  rollout_dir: outputs/synth_data_rollouts
+
+sources:
+  - kaggle_notebook
+
+filter_csv: null
+
+seed_preparation:
+  download_all_upfront: false
+
+pipeline:
+  n_synth_workers: 4
+  stage: full
+  skip_timeout: false
+
+rollout:
+  enabled: false
+
+upload:
+  enabled: false

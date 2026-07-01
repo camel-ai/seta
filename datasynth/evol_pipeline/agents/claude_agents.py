@@ -211,6 +211,8 @@ def _preload_guide(
 STRATEGY_ADAPTERS: Dict[str, str] = {
     "INCREASE_DIFFICULTY": "evol_strategy_prompts/increase_difficulty_adapter.md",
     "DECREASE_DIFFICULTY": "evol_strategy_prompts/decrease_difficulty_adapter.md",
+    "SLIGHT_INCREASE": "evol_strategy_prompts/slight_increase_adapter.md",
+    "SLIGHT_DECREASE": "evol_strategy_prompts/slight_decrease_adapter.md",
     "CHANGE_CONTEXT": "evol_strategy_prompts/change_context_adapter.md",
     "INCREASE_DIFFICULTY_AND_CHANGE_CONTEXT": "evol_strategy_prompts/increase_difficulty_and_change_context_adapter.md",
 }
@@ -285,7 +287,7 @@ class ClaudeEvolAgent(EvolAgent):
         )
 
         options = ClaudeAgentOptions(
-            model="claude-opus-4-6",
+            model="claude-sonnet-4-6",
             permission_mode="acceptEdits",
             cwd=agent_cwd,
             env=os.environ.copy(),
@@ -397,7 +399,7 @@ class ClaudeDatapointAgent(DatapointAgent):
         )
 
         options = ClaudeAgentOptions(
-            model="claude-opus-4-6",
+            model="claude-sonnet-4-6",
             permission_mode="acceptEdits",
             cwd=evol_task_path,
             env=os.environ.copy(),
@@ -475,7 +477,7 @@ class ClaudeTrajectoryJudgeAgent:
 
         # Evidence is pre-embedded in the prompt; the judge only needs Write.
         options = ClaudeAgentOptions(
-            model="claude-opus-4-6",
+            model="claude-sonnet-4-6",
             permission_mode="acceptEdits",
             cwd=task_path,
             env=os.environ.copy(),
