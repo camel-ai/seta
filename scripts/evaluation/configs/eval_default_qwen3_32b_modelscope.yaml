@@ -1,0 +1,60 @@
+# ModelScope Qwen3-32B evaluation config (OpenAI-compatible API).
+#
+# Usage:
+#   export MODELSCOPE_API_KEY="ms-..."
+#   python scripts/evaluation/eval.py --config scripts/evaluation/configs/eval_default_qwen3_32b_modelscope.yaml
+
+# === TerminalEnv config ===
+terminal_env:
+  model:
+    model_platform: modelscope
+    model_type: Qwen/Qwen3-32B
+    api_key: ${oc.env:MODELSCOPE_API_KEY}
+    url: https://api-inference.modelscope.cn/v1
+    model_config_dict:
+      max_tokens: 4096
+      stream: false
+      extra_body:
+        enable_thinking: false
+        thinking_budget: 4096
+
+  agent:
+    agent: train_agent
+    prompt: sys_prompt_base
+    max_total_tokens: 28672
+    max_completion_tokens: 4096
+    max_iteration: 200
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+    thinking: true
+
+  runtime:
+    env_type: docker
+    trial_root: ""
+    toolkit: docker
+
+  env:
+    reward_fn: pass_ratio
+    task_timeouts:
+      _reset_env: 300.0
+      _reset_agent: 120.0
+      agent_astep: 900.0
+      _evaluate_completion_sync: 600.0
+      _cleanup: null
+
+# === Eval-loop settings ===
+n_trajs: 1
+workers: 1
+seed: 42
+
+dataset: seta-env-v2
+output_dir: outputs/eval
+experiment_name: eval_modelscope_qwen32b
+trial_name: ""
+rank: 0
+world_size: 1

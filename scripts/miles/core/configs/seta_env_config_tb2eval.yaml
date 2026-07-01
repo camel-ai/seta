@@ -1,0 +1,48 @@
+# seta_env config for Terminal-Bench-2.0 EVAL sweep (base + iter 49..199).
+# Derived from seta_env_config.yaml; ONLY max_iteration and max_total_tokens
+# changed per the eval spec:
+#   max_iteration  50    -> 200    (max agent steps)
+#   max_total_tokens 655360 -> 524288  (512k total token budget)
+# Per-response (max_completion_tokens / max_new_tokens) left at the eval default
+# of 4096; agent_astep timeout (3h) already accommodates max_iteration=200.
+
+terminal_env:
+  model:
+    model_platform: sglang_deepseek_v4
+    model_type: /data/models/DeepSeek-V4-Flash-FP8
+    url: http://localhost:30000
+    tito_enabled: false
+    model_config_dict:
+      max_new_tokens: 4096
+      temperature: 1.0
+      top_p: 0.95
+      thinking_mode: thinking
+      reasoning_effort: high
+
+  agent:
+    agent: tito_train_agent
+    prompt: sys_prompt_base
+    max_total_tokens: 524288      # 512k total token budget (was 655360)
+    max_completion_tokens: 4096
+    max_iteration: 200            # max agent steps (was 50)
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+
+  runtime:
+    env_type: daytona
+    toolkit: auto
+    override_storage_mb: 6144   # 6 GB per sandbox (fit more under Daytona quota)
+
+  env:
+    reward_fn: pass_ratio_with_bonus
+    task_timeouts:
+      _reset_env: 3600.0
+      _reset_agent: 120.0
+      agent_astep: 10800.0   # 3h — accommodates max_iteration=200
+      _evaluate_completion_sync: 900.0
+      _cleanup: 120.0

@@ -1,0 +1,49 @@
+# seta_env env_service config for miles RL training.
+#
+# Used by env_service to configure the agent, model, runtime, and evaluation.
+# Model URL and API key are overridden per /step request from the session URL.
+#
+# Start env_service:
+#   ENV_SERVICE_CONFIG=scripts/miles/seta_env_config.yaml \
+#   DATASET_ROOT=dataset \
+#   MAX_SLOTS=8 \
+#   uvicorn seta_env.services.env_service:app --host 0.0.0.0 --port 8002
+
+terminal_env:
+  # model: url + api_key are overridden per /step request (Miles Router session URL)
+  # tito_enabled pairs with Miles Router's TITO session tracking
+  model:
+    model_platform: sglang
+    model_type: Qwen/Qwen3-8B
+    tito_enabled: true
+    model_config_dict:
+      max_tokens: 4096
+      stream: false
+
+  agent:
+    agent: tito_train_agent
+    prompt: sys_prompt_base
+    max_total_tokens: 28672
+    max_completion_tokens: 4096
+    max_iteration: 30
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+    thinking: false
+
+  runtime:
+    env_type: docker
+    toolkit: docker
+
+  env:
+    reward_fn: pass_ratio
+    task_timeouts:
+      _reset_env: 300.0
+      _reset_agent: 120.0
+      agent_astep: 900.0
+      _evaluate_completion_sync: 600.0
+      _cleanup: null

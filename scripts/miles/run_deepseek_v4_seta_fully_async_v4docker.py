@@ -1,0 +1,757 @@
+"""
+VERSION: DEEPSEEK V4 DOCKER (rolled-back image).
+This is the deepseek-v4-docker variant of run_deepseek_v4_seta_fully_async.py.
+It is IDENTICAL to that launcher EXCEPT the router flags in sglang_args: this
+image's train_async.py uses the old miles-router interface (--use-miles-router
++ --miles-router-middleware-paths ConsistentHashMiddleware + --router-policy +
+--router-dp-aware), and rejects the newer --sglang-router-policy /
+--pause-generation-mode. Launched via run_deepseek_v4_seta_fully_async_v4docker.sh
+with seta_env_config_milesrouter_r3_v4docker.yaml (max_iteration 60). Keep this
+file's router config separate from the newer-docker launcher.
+
+DeepSeek V4 training script.
+
+Supports:
+  - DeepSeek-V4-Flash-FP8         Public FP8 repackage of deepseek-ai/DeepSeek-V4-Flash
+                                  (sgl-project/DeepSeek-V4-Flash-FP8, 291B, 43 layers).
+                                  Verified full-model profiles: 8 nodes x 8 GPUs on H200
+                                  or 8 nodes x 4 GPUs on GB300.
+  - DeepSeek-V4-Flash-FP8-4layer  4-layer prune of the above for single-node
+                                  smoke testing. **Cannot generate meaningful output -
+                                  pipeline-only sanity check.**
+  - DeepSeek-V4-Pro-FP8           Verified profile: 32 nodes x 8 GPUs on H200.
+
+Usage patterns:
+
+  1. One-shot full pipeline (download + convert + train):
+       python scripts/run_deepseek_v4.py full-train \
+           --model-name DeepSeek-V4-Flash-FP8-4layer \
+           --num-nodes 1 --num-gpus-per-node 8
+
+  2. Individual steps (download -> FP8->BF16 -> BF16->torch_dist -> rsync -> train):
+       python scripts/run_deepseek_v4.py prepare-download --model-name DeepSeek-V4-Flash-FP8
+       python scripts/run_deepseek_v4.py prepare-single   --model-name DeepSeek-V4-Flash-FP8 \
+           --hf-checkpoint /root/models/DeepSeek-V4-Flash-FP8
+       python scripts/run_deepseek_v4.py prepare-spmd     --model-name DeepSeek-V4-Flash-FP8 \
+           --num-nodes 8 --num-gpus-per-node 8
+       python scripts/run_deepseek_v4.py prepare-cp       --model-name DeepSeek-V4-Flash-FP8
+       python scripts/run_deepseek_v4.py train            --model-name DeepSeek-V4-Flash-FP8 \
+           --num-nodes 8 --num-gpus-per-node 8 \
+           --hf-checkpoint /root/models/DeepSeek-V4-Flash-FP8
+"""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
+
+import typer
+
+import miles.utils.external_utils.command_utils as U
+
+app = typer.Typer()
+
+_DEFAULT_MODEL_ORG = {
+    "DeepSeek-V4-Flash-FP8": "sgl-project",
+    # 4-layer prune of sgl-project/DeepSeek-V4-Flash-FP8.
+    "DeepSeek-V4-Flash-FP8-4layer": "Pinaster",
+    "DeepSeek-V4-Pro-FP8": "sgl-project",
+}
+
+_MEGATRON_MODEL_TYPE = {
+    "DeepSeek-V4-Flash-FP8": "deepseek-v4-flash",
+    "DeepSeek-V4-Flash-FP8-4layer": "deepseek-v4-flash-4layer",
+    "DeepSeek-V4-Pro-FP8": "deepseek-v4-pro",
+}
+
+_PRO_MODEL_NAMES = ("DeepSeek-V4-Pro-FP8",)
+_BLACKWELL_HARDWARE = ("B200", "B300", "GB200", "GB300")
+
+
+@dataclass
+class ScriptArgs(U.ExecuteTrainConfig):
+    mode: Literal["normal", "debug_minimal"] = "debug_minimal"
+    run_id: str = U.create_run_id()
+    model_org: str = ""
+    model_name: Literal[
+        "DeepSeek-V4-Flash-FP8",
+        "DeepSeek-V4-Flash-FP8-4layer",
+        "DeepSeek-V4-Pro-FP8",
+    ] = "DeepSeek-V4-Flash-FP8"
+
+    task: Literal["dapo_aime", "gsm8k", "camel_terminal_agent"] = "camel_terminal_agent"
+    enable_eval: bool = False
+
+    hf_checkpoint: str | None = None
+    data_dir: str = "/root/datasets"
+    model_dir: str = "/root/models"
+    # Defaults to model_dir. Set explicitly when shared NFS -> per-node local NVMe copy is needed.
+    model_local_dir: str | None = None
+    save_dir: str = "/root/models"
+    megatron_path: str = "/root/Megatron-LM"
+
+    # performance configs
+    num_gpus_per_node: int = 8
+    hardware: Literal["auto", "H100", "H200", "B200", "B300", "GB200", "GB300"] = "auto"
+    # fully-async disaggregated: 2 rollout (serving) nodes + (num_nodes-2) actor nodes.
+    rollout_num_nodes: int = 2
+    colocate: bool = field(init=False)
+    actor_num_nodes: int = field(init=False)
+    actor_num_gpus_per_node: int = field(init=False)
+    rollout_num_gpus: int = field(init=False)
+    enable_mtp: bool = True
+    optimizer_offload: bool = True
+    use_fault_tolerance: bool = True
+    cp_size: int = 1
+
+    # debug configs
+    dump_details: bool = True
+    debug_train_run_id: str | None = None
+    debug_train_rollout_id: str | None = None
+    debug_data_root: str = "/root/shared_data"
+    skip_saving: bool = False
+
+    # precision configs
+    enable_r3: bool = True
+    train_deterministic: bool = True
+    # Megatron-side training precision: blockwise FP8 128x128 GEMMs when True
+    # (Hopper: fp32 scales; Blackwell: pow2 scales, MXFP8-emulated), BF16 when False.
+    # Rollout always serves the source FP8 checkpoint either way.
+    fp8_training: bool = True
+    enable_mis: bool = False
+
+
+    # sglang configs
+    sglang_dp_size: int | None = None
+    sglang_ep_size: int | None = None
+
+    # camel_terminal_agent (seta_env) configs
+    # OVERFIT ABLATION (done, confirmed overfitting on 8 tasks): 8-task set
+    # seta_env_parquet_path: str = "/data/terminal_agent/dataset/seta-env-overfit8-grpo.parquet"
+    # seta_env_parquet_path: str = "/data/terminal_agent/dataset/seta-env-final-camel-combined-grpo.parquet"  # LARGE dataset (988 tasks)
+    # seta_env_parquet_path: str = "/data/terminal_agent/dataset/seta-env-mid-1to6of8.parquet"  # MID-difficulty overfit: 373 tasks @ pass@8 1/8..6/8 from today's eval (~47 steps/epoch)
+    seta_env_parquet_path: str = "/data/terminal_agent/dataset/seta-env-mid1to6of8-qc4plus-951.parquet"  # 951 curated mid-band (pass@8 1-6/8, trainset+heldout, QC>4)
+    rollout_response_len: int = 8192
+    seta_env_eval_n_samples: int = 8
+    seta_env_max_response_len: int = 8192
+    group_filter_min_reward_std: float = 1e-8   # remove ONLY zero-std (all-same-reward) groups; no other std constraint
+    # pass any extra sglang/miles/megatron args through `--extra-args '--your-arg'`
+    extra_args: str = ""
+
+    def __post_init__(self):
+        if not self.model_org:
+            self.model_org = _DEFAULT_MODEL_ORG[self.model_name]
+        if self.model_local_dir is None:
+            self.model_local_dir = self.model_dir
+        if self.model_name in _PRO_MODEL_NAMES:
+            self.enable_r3 = False
+        assert self.rollout_num_nodes >= 0
+        assert self.rollout_num_nodes < self.num_nodes
+        self.colocate = self.rollout_num_nodes == 0
+        self.actor_num_nodes = self.num_nodes - self.rollout_num_nodes
+        self.actor_num_gpus_per_node = self.num_gpus_per_node
+        if self.colocate:
+            self.rollout_num_gpus = self.num_nodes * self.num_gpus_per_node
+        else:
+            self.rollout_num_gpus = self.rollout_num_nodes * self.num_gpus_per_node
+
+    @property
+    def megatron_model_type(self):
+        return _MEGATRON_MODEL_TYPE[self.model_name]
+
+    @property
+    def torch_dist_name(self):
+        return f"{self.model_name}_torch_dist"
+
+    @property
+    def bf16_name(self):
+        if self.model_name == "DeepSeek-V4-Pro-FP8":
+            return "DeepSeek-V4-Pro-BF16"
+        return f"{self.model_name}-bf16"
+
+
+def _is_blackwell(args: ScriptArgs) -> bool:
+    if args.hardware != "auto":
+        return args.hardware in _BLACKWELL_HARDWARE
+
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("Cannot auto-detect hardware because CUDA is not available. Pass --hardware explicitly.")
+    major, _minor = torch.cuda.get_device_capability()
+    return major >= 10
+
+
+def _download_dataset(args: ScriptArgs):
+    """Download the task-specific dataset(s)."""
+    match args.task:
+        case "dapo_aime":
+            U.hf_download_dataset("zhuzilin/dapo-math-17k", data_dir=args.data_dir)
+            U.hf_download_dataset("zhuzilin/aime-2024", data_dir=args.data_dir)
+        case "gsm8k":
+            U.hf_download_dataset("zhuzilin/gsm8k", data_dir=args.data_dir)
+        case "camel_terminal_agent":
+            # No hf download needed 
+            pass
+
+
+def _hf_checkpoint_path(args: ScriptArgs) -> str:
+    """Resolve hf_checkpoint path: explicit override wins, else {model_dir}/{model_name}."""
+    return args.hf_checkpoint or f"{args.model_dir}/{args.model_name}"
+
+
+def _ensure_4layer_model_type(args: ScriptArgs):
+    """Undo the old deepseek_ref workaround for local 4-layer prunes."""
+    if args.model_name != "DeepSeek-V4-Flash-FP8-4layer":
+        return
+    cfg = Path(_hf_checkpoint_path(args)) / "config.json"
+    if not cfg.exists():
+        return
+    text = cfg.read_text()
+    if '"model_type": "deepseek_ref"' in text:
+        cfg.write_text(text.replace('"model_type": "deepseek_ref"', '"model_type": "deepseek_v4"'))
+        print(f"[patch] {cfg}: model_type deepseek_ref -> deepseek_v4")
+
+
+def _prepare_download(args: ScriptArgs):
+    """Download HF checkpoint + task dataset. Idempotent: hf skips existing blobs."""
+    U.exec_command(f"mkdir -p {args.model_dir} {args.data_dir}")
+    # Only download if the user has NOT supplied a pre-existing checkpoint dir.
+    # (prepare_single / train with --hf-checkpoint bypass this.)
+    if args.hf_checkpoint is None:
+        dest = f"{args.model_dir}/{args.model_name}"
+        U.exec_command(f"hf download {args.model_org}/{args.model_name} " f"--local-dir {dest}")
+    _ensure_4layer_model_type(args)
+    _download_dataset(args)
+
+
+@app.command()
+@U.dataclass_cli
+def prepare_download(args: ScriptArgs):
+    """Download HF checkpoint + dataset from HuggingFace. Run on one node (shared NFS)."""
+    _prepare_download(args)
+
+
+def _prepare_single(args: ScriptArgs):
+    _download_dataset(args)
+
+    src = _hf_checkpoint_path(args)
+    U.fp8_cast_bf16(
+        path_src=src,
+        path_dst=f"{args.model_dir}/{args.bf16_name}/",
+    )
+
+
+@app.command()
+@U.dataclass_cli
+def prepare_single(args: ScriptArgs):
+    """FP8 -> BF16 cast for Megatron. Needs --hf-checkpoint (or pre-downloaded). One node."""
+    _prepare_single(args)
+
+
+def _prepare_spmd(args: ScriptArgs):
+    is_4layer = args.model_name == "DeepSeek-V4-Flash-FP8-4layer"
+    actor_num_nodes = args.actor_num_nodes
+    actor_num_gpus_per_node = args.actor_num_gpus_per_node
+    extra_args = "--expert-tensor-parallel-size 1 --context-parallel-size 1 "
+    if actor_num_nodes == 1 and is_4layer:
+        extra_args += (
+            "--tensor-model-parallel-size 1 " "--pipeline-model-parallel-size 1 " "--expert-model-parallel-size 1 "
+        )
+    elif actor_num_nodes == 8 and args.model_name == "DeepSeek-V4-Flash-FP8":
+        extra_args += (
+            "--tensor-model-parallel-size 1 "
+            "--pipeline-model-parallel-size 8 "
+            "--expert-model-parallel-size 4 "
+            "--decoder-first-pipeline-num-layers 7 "
+            "--decoder-last-pipeline-num-layers 6 "
+        )
+    elif actor_num_nodes == 32 and actor_num_gpus_per_node == 8 and args.model_name == "DeepSeek-V4-Pro-FP8":
+        extra_args += (
+            "--tensor-model-parallel-size 8 "
+            "--pipeline-model-parallel-size 8 "
+            "--expert-model-parallel-size 32 "
+            "--decoder-first-pipeline-num-layers 7 "
+            "--decoder-last-pipeline-num-layers 6 "
+            "--make-vocab-size-divisible-by 32 "
+        )
+    else:
+        raise NotImplementedError(
+            f"No verified SPMD conversion config for {args.model_name} "
+            f"({actor_num_nodes} actor nodes x {actor_num_gpus_per_node} GPUs/node). "
+            f"Please specify your conversion parallel config in `run_deepseek_v4.py`."
+        )
+
+    num_gpus_for_convert = actor_num_gpus_per_node
+    if is_4layer:
+        num_gpus_for_convert = min(num_gpus_for_convert, 4)
+
+    U.convert_checkpoint(
+        model_name=args.model_name,
+        hf_checkpoint=f"{args.model_dir}/{args.bf16_name}",
+        megatron_model_type=args.megatron_model_type,
+        num_gpus_per_node=num_gpus_for_convert,
+        multinode=True if actor_num_nodes > 1 else False,
+        num_nodes=actor_num_nodes,
+        extra_args=extra_args,
+        dir_dst=f"{args.model_dir}",
+        megatron_path=args.megatron_path,
+    )
+
+
+@app.command()
+@U.dataclass_cli
+def prepare_spmd(args: ScriptArgs):
+    _prepare_spmd(args)
+
+
+@app.command()
+@U.dataclass_cli
+def prepare_cp(args: ScriptArgs):
+    _prepare_cp(args)
+
+
+def _prepare_cp(args: ScriptArgs):
+    U.rsync_simple(
+        path_src=f"{args.model_dir}/{args.torch_dist_name}",
+        path_dst=f"{args.model_local_dir}/{args.torch_dist_name}",
+        num_nodes=args.num_nodes,
+    )
+    U.rsync_simple(
+        path_src=f"{args.model_dir}/{args.model_name}",
+        path_dst=f"{args.model_local_dir}/{args.model_name}",
+        num_nodes=args.num_nodes,
+    )
+
+
+def _get_parallel_config(args: ScriptArgs) -> str:
+    """Return parallel config args for tested GPU configurations.
+
+    Only includes configurations that have been verified to work.
+    Raises NotImplementedError for untested configurations.
+    """
+    actor_num_nodes = args.actor_num_nodes
+    actor_num_gpus_per_node = args.actor_num_gpus_per_node
+    total_gpus = actor_num_nodes * actor_num_gpus_per_node
+
+    # Single-node smoke-test configs
+    if actor_num_nodes == 1:
+        return (
+            f"--tensor-model-parallel-size {actor_num_gpus_per_node} "
+            "--sequence-parallel "
+            "--pipeline-model-parallel-size 1 "
+            "--context-parallel-size 1 "
+            f"--expert-model-parallel-size {actor_num_gpus_per_node} "
+            "--expert-tensor-parallel-size 1 "
+        )
+
+    # GB300: 4 GPUs/node
+    if actor_num_gpus_per_node == 4:
+        if total_gpus == 32:  # 8 nodes x 4 GPUs
+            return (
+                "--tensor-model-parallel-size 2 "
+                "--sequence-parallel "
+                "--pipeline-model-parallel-size 8 "
+                "--decoder-first-pipeline-num-layers 4 "
+                "--decoder-last-pipeline-num-layers 3 "
+                "--context-parallel-size 2 "
+                "--expert-model-parallel-size 4 "
+                "--expert-tensor-parallel-size 1 "
+            )
+
+    # H200: 8 GPUs/node
+    if actor_num_gpus_per_node == 8:
+        if total_gpus == 48:  # 6 actor nodes x 8 GPUs (fully-async fallback: 1 rollout + 6 actor)
+            return (
+                "--tensor-model-parallel-size 8 "
+                "--sequence-parallel "
+                "--pipeline-model-parallel-size 6 "
+                "--decoder-first-pipeline-num-layers 4 "
+                "--decoder-last-pipeline-num-layers 3 "
+                "--context-parallel-size 1 "
+                "--expert-model-parallel-size 8 "
+                "--expert-tensor-parallel-size 1 "
+            )
+        if total_gpus == 56:  # 7 actor nodes x 8 GPUs (fully-async: 1 rollout + 7 actor)
+            return (
+                "--tensor-model-parallel-size 8 "
+                "--sequence-parallel "
+                "--pipeline-model-parallel-size 7 "
+                "--decoder-first-pipeline-num-layers 4 "
+                "--decoder-last-pipeline-num-layers 4 "
+                "--context-parallel-size 1 "
+                "--expert-model-parallel-size 8 "
+                "--expert-tensor-parallel-size 1 "
+            )
+        if total_gpus == 64:  # 8 nodes x 8 GPUs
+            return (
+                "--tensor-model-parallel-size 8 "
+                "--sequence-parallel "
+                "--pipeline-model-parallel-size 8 "
+                "--decoder-first-pipeline-num-layers 4 "
+                "--decoder-last-pipeline-num-layers 3 "
+                "--context-parallel-size 1 "
+                "--expert-model-parallel-size 8 "
+                "--expert-tensor-parallel-size 1 "
+            )
+        elif total_gpus == 256:  # 32 nodes x 8 GPUs (Pro)
+            return (
+                "--tensor-model-parallel-size 8 "
+                "--sequence-parallel "
+                "--pipeline-model-parallel-size 8 "
+                "--decoder-first-pipeline-num-layers 7 "
+                "--decoder-last-pipeline-num-layers 6 "
+                "--context-parallel-size 1 "
+                "--expert-model-parallel-size 32 "
+                "--expert-tensor-parallel-size 1 "
+            )
+
+    raise NotImplementedError(
+        f"No pre-set parallel config for {total_gpus} GPUs. "
+        f"Please specify your parallel config in `run_deepseek_v4._get_parallel_config`."
+    )
+
+
+def _train(args: ScriptArgs):
+    print(f"[precision] fp8_training={args.fp8_training}")
+    print(
+        f"running on {args.num_nodes} nodes "
+        f"({args.actor_num_nodes} actor nodes x {args.actor_num_gpus_per_node} GPUs/node, "
+        f"{args.rollout_num_gpus} rollout GPUs, colocate={args.colocate})"
+    )
+    _ensure_4layer_model_type(args)
+
+    load_save_path = f"{args.save_dir}/checkpoints"  # unified layout: all outputs under save_dir (=RUN_ROOT)
+    ckpt_args = f"--hf-checkpoint {args.hf_checkpoint} " f"--ref-load {args.model_local_dir}/{args.torch_dist_name} "
+    if not args.skip_saving:
+        ckpt_args += (
+            f"--load {load_save_path} " f"--save {load_save_path} "
+            "--save-interval 50 " "--save-retain-interval 50 "
+            "--no-save-optim " "--no-load-optim "
+        )
+
+    rollout_args = (
+        "--label-key label "
+        "--apply-chat-template "
+        "--rollout-shuffle "
+        "--rm-type math "
+        "--num-rollout 3000 "
+        "--rollout-batch-size 8 "   # TRAIN batch (target_data_size + global_batch_size=8*16=128); concurrency is separate
+        "--n-samples-per-prompt 16 "
+        "--rollout-temperature 0.8 "
+        "--num-steps-per-rollout 1 "
+        "--balance-data "
+    )
+
+    if args.mode != "debug_minimal":
+        rollout_args += (
+            "--over-sampling-batch-size 512 "
+            "--dynamic-sampling-filter-path core.group_reward_filter.filter_group "
+        )
+
+    eval_args = ""
+    if args.enable_eval:
+        eval_args += "--eval-interval 20 " "--eval-top-p 0.7 "
+    else:
+        eval_args += "--skip-eval-before-train "  # eval-interval stays None -> no eval, no dataset needed
+
+    match args.task:
+        case "dapo_aime":
+            rollout_args += (
+                f"--prompt-data {args.data_dir}/dapo-math-17k/dapo-math-17k.jsonl "
+                "--input-key prompt "
+                f"--rollout-max-response-len 4096 "
+                """--apply-chat-template-kwargs '{"thinking_mode":"thinking"}' """
+            )
+            eval_args += (
+                f"--eval-prompt-data aime {args.data_dir}/aime-2024/aime-2024.jsonl "
+                "--n-samples-per-eval-prompt 8 "
+                "--eval-max-response-len 4096 "
+            )
+        case "gsm8k":
+            rollout_args += (
+                f"--prompt-data {args.data_dir}/gsm8k/train.parquet "
+                "--input-key messages "
+                "--rollout-max-response-len 256 "
+            )
+            eval_args += (
+                f"--eval-prompt-data gsm8k {args.data_dir}/gsm8k/test.parquet "
+                "--n-samples-per-eval-prompt 1 "
+                "--eval-max-response-len 256 "
+            )
+        case "camel_terminal_agent":
+            # Note: --apply-chat-template is NOT set — env_service applies the
+            # V4 chat template itself via encoding_dsv4.encode_messages, and
+            # our generate fn passes the raw instruction string through to
+            # env_service /step.
+            rollout_args = rollout_args.replace("--apply-chat-template ", "")
+            rollout_args = rollout_args.replace("--rm-type math ", "")
+            rollout_args += (
+                f"--prompt-data {args.seta_env_parquet_path} "
+                "--input-key prompt "
+                f"--rollout-max-response-len {args.rollout_response_len} "
+                "--custom-generate-function-path core.generate_with_camel.generate "
+                "--custom-rm-path core.reward_func.reward_func "
+                "--dynamic-sampling-filter-path core.group_reward_filter.filter_group "
+                "--custom-rollout-log-function-path core.camel_rollout_metrics.log_rollout_data "
+                "--rollout-function-path core.fully_async_rollout_seta.generate_rollout_fully_async "
+                "--update-weights-interval 1 "
+                # COMPAT (deepseekv4 docker miles): train_async.py no longer accepts
+                # --pause-generation-mode (argparse: "unrecognized arguments"). Drop it; the
+                # newer rollout path uses its own default pause behavior.
+                # "--pause-generation-mode in_place "
+            )
+            if args.enable_eval:
+                eval_args += (
+                    f"--eval-prompt-data {args.task} {args.seta_env_parquet_path} "
+                    f"--n-samples-per-eval-prompt {args.seta_env_eval_n_samples} "
+                    f"--eval-max-response-len {args.seta_env_max_response_len} "
+                )
+    perf_args = _get_parallel_config(args)
+
+    perf_args += (
+        "--recompute-granularity full "
+        "--recompute-method uniform "
+        "--recompute-num-layers 1 "
+        "--micro-batch-size 1 "
+        "--max-tokens-per-gpu 2048 "
+    )
+
+    grpo_args = (
+        "--advantage-estimator grpo "
+        # KEEP kl logging: --use-kl-loss makes miles compute low_var_kl(policy||base)
+        # and log train/kl_loss (our drift-from-base metric). The NaN-grad crash this
+        # used to cause (0.00*NaN from the kl branch in the loss graph) is fixed at the
+        # source by PATCH 5 (loss.py: `if kl_loss_coef != 0:` guards the loss addition),
+        # so at coef 0 the kl is computed+logged but NOT added to the loss -> no NaN
+        # reaches the gradient, and no training step is skipped. See PATCHES.md Patch 5.
+        "--use-kl-loss "
+        "--kl-loss-coef 0.00 "
+        "--kl-loss-type low_var_kl "
+        "--entropy-coef 1e-8 "      # ~0: miles only computes/logs entropy when coef!=0 (with_entropy gate)
+        "--eps-clip 0.2 "
+        "--eps-clip-high 0.28 "
+    )
+
+    optimizer_args = (
+        "--optimizer adam "
+        # OVERFIT ABLATION: lr 1e-6 too small to move policy in tens of epochs (kl_loss stuck on numerical floor); bumped 10x to see overfitting
+        "--lr 1e-6 "
+        # "--lr 1e-5 "  # kl_loss rose too fast w/o raw_reward gain on the large set
+        # "--lr 5e-6 "  # MID-overfit: middle ground (1e-6 too slow to move policy, 1e-5 too aggressive)
+        "--lr-decay-style constant "
+        "--weight-decay 0.1 "
+        "--adam-beta1 0.9 "
+        "--adam-beta2 0.98 "
+    )
+    if args.optimizer_offload:
+        optimizer_args += (
+            "--optimizer-cpu-offload " "--use-precision-aware-optimizer " "--overlap-cpu-optimizer-d2h-h2d "
+        )
+
+    if args.model_name == "DeepSeek-V4-Pro-FP8":
+        sglang_world_size = 32
+        sglang_tp_size = 32
+        sglang_dp_size = 32
+        sglang_ep_size = 32
+        sglang_a2a_backend = "deepep"
+    else:
+        sglang_world_size = args.num_gpus_per_node
+        sglang_tp_size = sglang_world_size
+        sglang_dp_size = args.sglang_dp_size if args.sglang_dp_size is not None else 1
+        sglang_ep_size = args.sglang_ep_size if args.sglang_ep_size is not None else sglang_world_size
+        sglang_a2a_backend = None
+    sglang_args = (
+        f"--rollout-num-gpus-per-engine {sglang_world_size} "
+        f"--sglang-tp-size {sglang_tp_size} "
+        f"--sglang-dp-size {sglang_dp_size} "
+        "--sglang-attention-backend compressed "
+        # ROUTER (deepseek v4 docker): R3 (routed_experts capture) REQUIRES the miles
+        # router on this image. The sglang-router POLICY flags (--router-policy /
+        # --router-dp-aware / --sglang-router-policy) select the Rust sglang router,
+        # which does NOT support routed_experts capture here ("sglang router + R3 not
+        # supported") — those stay OFF (run_deepseek_v4.py:113-119,759-764: emit
+        # --use-miles-router for enable_r3 & not use_sglang_router).
+        "--use-miles-router "
+        # ConsistentHashMiddleware is a MILES-ROUTER plugin (not sglang) — session-sticky
+        # routing on X-Session-Id (the seta V4 client sends it) for prefix-cache hits,
+        # with safe fallback to least-loaded if no key. Proven with R3 on the 2026-06-15
+        # RELAUNCH run on THIS docker; restores prefix-cache the seta multi-turn agent needs.
+        "--miles-router-middleware-paths scripts.miles.consistent_hash_middleware.ConsistentHashMiddleware "
+        "--sglang-page-size 256 "
+        "--sglang-max-running-requests 96 "
+        "--sglang-chunked-prefill-size 8192 "
+        "--sglang-server-concurrency 1024 "
+        # weight-loader cache drop after load (both references emit it; frees host mem
+        # after the 291B FP8 load). run_deepseek_v4.py:636, RELAUNCH resolved cmd.
+        "--sglang-weight-loader-drop-cache-after-load "
+        "--router-health-success-threshold 1 "
+        "--router-health-check-interval-secs 15 "
+        "--router-health-failure-threshold 40 "  # TODO improve
+    )
+    if sglang_a2a_backend:
+        sglang_args += f"--sglang-moe-a2a-backend {sglang_a2a_backend} " "--sglang-cuda-graph-max-bs 8 "
+    if False and args.enable_mtp:  # MTP/EAGLE specdec DISABLED — was driving train_rollout_logprob_abs_diff ~0.1 (vs ~0.02-0.04 with MTP off); flip back to `if args.enable_mtp:` to re-enable
+        sglang_args += (
+            "--sglang-speculative-algorithm EAGLE "
+            "--sglang-speculative-num-steps 3 "
+            "--sglang-speculative-eagle-topk 1 "
+            "--sglang-speculative-num-draft-tokens 4 "
+        )
+    sglang_args += f"--sglang-ep-size {sglang_ep_size} "
+    extra_env_vars = {
+        "SGLANG_SKIP_CHECKPOINT_LOAD_CHECK": "1",
+        "SGLANG_DSV4_FP4_EXPERTS": "0",
+        "SGLANG_HEALTH_CHECK_TIMEOUT": "120",
+        "SGLANG_DG_CACHE_DIR_PER_PROCESS": "1",
+        "SGLANG_OPT_FP8_WO_A_GEMM": "0",
+    }
+    if args.model_name == "DeepSeek-V4-Pro-FP8":
+        extra_env_vars["SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK"] = "256"
+        extra_env_vars["SGLANG_JIT_DEEPGEMM_PRECOMPILE"] = "0"
+
+    misc_args = (
+        "--attention-dropout 0.0 "
+        "--hidden-dropout 0.0 "
+        "--attention-softmax-in-fp32 "
+        f"--update-weight-buffer-size {1 * 1024 ** 3} "
+        f"--actor-num-nodes {args.actor_num_nodes} "
+        f"--actor-num-gpus-per-node {args.actor_num_gpus_per_node} "
+        f"--num-gpus-per-node {args.num_gpus_per_node} "
+        "--train-memory-margin-bytes 3221225472 "
+        "--sglang-mem-fraction-static 0.84 "
+        "--accumulate-allreduce-grads-in-fp32 "
+        "--model-name deepseekv4 "  # for mbridge load
+        "--qkv-format bshd "
+        "--moe-router-freeze-gate "
+        "--freeze-e-score-correction-bias "
+        "--rollout-health-check-interval 300 "
+        "--rollout-health-check-timeout 300 "
+    )
+    if args.colocate:
+        misc_args += "--colocate "
+    else:
+        misc_args += f"--rollout-num-gpus {args.rollout_num_gpus} "
+
+    if args.dump_details:
+        misc_args += f"--dump-details {args.save_dir}/dump_details "
+
+    if args.enable_mis:
+        misc_args += (
+            "--use-tis "
+            "--custom-config-path examples/train_infer_mismatch_helper/mis.yaml "
+            "--custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp "
+        )
+
+    if args.use_fault_tolerance:
+        misc_args += "--use-fault-tolerance "
+
+    if args.debug_train_run_id is not None:
+        if args.debug_train_rollout_id is None:
+            args.debug_train_rollout_id = 1
+        misc_args += (
+            f"--load-debug-rollout-data "
+            f"{args.debug_data_root}/{args.debug_train_run_id}/dump_details/rollout_data/{args.debug_train_rollout_id}.pt "
+        )
+        misc_args += "--debug-train-only "
+
+    if args.enable_r3:
+        misc_args += "--use-rollout-routing-replay "
+
+    if args.train_deterministic:
+        misc_args += "--deterministic-mode "
+        extra_env_vars |= {
+            "NCCL_ALGO": "Ring",
+            "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
+            "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        }
+
+    if args.fp8_training:
+        misc_args += "--transformer-impl transformer_engine " "--bf16 " "--fp8-format e4m3 " "--fp8-recipe blockwise "
+        # On Blackwell, TE emulates the blockwise recipe with MXFP8, which requires pow2 scales.
+        fp32_scales = "0" if _is_blackwell(args) else "1"
+        misc_args += f"""--train-env-vars '{{"NVTE_FP8_BLOCK_SCALING_FP32_SCALES":"{fp32_scales}"}}' """
+
+    if args.task == "camel_terminal_agent":
+        # camel hooks live in this launcher's dir; std floor read by group_reward_filter.
+        extra_env_vars["PYTHONPATH"] = (
+            f"{args.megatron_path}:{Path(__file__).resolve().parent}:{Path(__file__).resolve().parents[2]}:"
+            f"{U.repo_base_dir / 'examples/fully_async'}:{U.repo_base_dir}"
+        )
+        extra_env_vars["GROUP_FILTER_MIN_REWARD_STD"] = str(args.group_filter_min_reward_std)
+        extra_env_vars["GROUP_FILTER_MAX_ENV_FAILURES"] = "1"   # STRICT: drop any group with >=1 env failure (0 failures allowed)
+        extra_env_vars["ROLLOUT_CONCURRENCY"] = os.environ.get("ROLLOUT_CONCURRENCY", "12")  # decoupled from train batch (8)
+        if os.environ.get("MILES_PIN_NODE_IPS"):  # forward healthy-node pin list (avoid wedged node) to the ray driver
+            extra_env_vars["MILES_PIN_NODE_IPS"] = os.environ["MILES_PIN_NODE_IPS"]
+        for _k in ("CAMEL_DATASET_NAME", "CAMEL_TRIAL_NAME", "CAMEL_ENV_SERVICE_URL"):
+            if os.environ.get(_k):  # generate_with_camel requires these in the ray worker env
+                extra_env_vars[_k] = os.environ[_k]
+
+    wandb_args = U.get_default_wandb_args(__file__, run_id=args.run_id)
+    if wandb_args:  # unified layout: keep wandb under save_dir (=RUN_ROOT)/wandb
+        wandb_args += f"--wandb-dir {args.save_dir}/wandb "
+        wandb_args += "--wandb-team eigent_radixark_training "  # team entity within zhichenzeng_zzz-org (can't log to org directly)
+
+    train_args = (
+        f"{ckpt_args} "
+        f"{rollout_args} "
+        f"{optimizer_args} "
+        f"{grpo_args} "
+        f"{wandb_args} "
+        f"{perf_args} "
+        f"{eval_args} "
+        f"{sglang_args} "
+        f"{misc_args} "
+        f"{args.extra_args} "
+    )
+
+    U.execute_train(
+        train_args=train_args,
+        config=args,
+        num_gpus_per_node=args.num_gpus_per_node,
+        megatron_model_type=args.megatron_model_type,
+        train_script="train_async.py",
+        extra_env_vars={**extra_env_vars},
+        megatron_path=args.megatron_path,
+    )
+
+
+@app.command()
+@U.dataclass_cli
+def train(args: ScriptArgs):
+    """Run training. Assumes data/model/torch_dist are already prepared on {model_local_dir}."""
+    _train(args)
+
+
+@app.command()
+@U.dataclass_cli
+def full_train(args: ScriptArgs):
+    _prepare_download(args)
+
+    bf16_dir = Path(f"{args.model_dir}/{args.bf16_name}")
+    bf16_sentinel = bf16_dir / "model.safetensors.index.json"
+    if not bf16_sentinel.exists():
+        _prepare_single(args)
+    else:
+        print(f"[full_train] Skipping FP8->BF16 cast: {bf16_sentinel} already exists.")
+
+    torch_dist_dir = Path(f"{args.model_dir}/{args.torch_dist_name}")
+    torch_dist_sentinel = torch_dist_dir / "latest_checkpointed_iteration.txt"
+    if not torch_dist_sentinel.exists():
+        _prepare_spmd(args)
+    else:
+        print(f"[full_train] Skipping BF16->torch_dist conversion: {torch_dist_sentinel} already exists.")
+
+    if args.model_local_dir != args.model_dir:
+        _prepare_cp(args)
+    else:
+        print(f"[full_train] Skipping rsync: model_local_dir == model_dir ({args.model_dir})")
+
+    if args.hf_checkpoint is None:
+        args.hf_checkpoint = f"{args.model_local_dir}/{args.model_name}"
+
+    _train(args)
+
+
+if __name__ == "__main__":
+    app()

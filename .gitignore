@@ -43,3 +43,20 @@ dataset/simple*-dataset/
 tagent
 
 dataset/*
+
+dart_example*
+datasynth/analysis_pipeline/synth_data*
+
+*outputs*
+
+# Slot pool node config (contains IPs, SSH keys — varies per deployment)
+seta_env/runtimes/slot_pool_service/nodes.yaml
+
+# Build artifacts
+*.egg-info/
+
+# FRP binaries (downloaded at runtime)
+seta_env/services/frp_tunnel/frp/
+
+# Env service node config (contains IPs — varies per deployment)
+seta_env/services/nodes.yaml

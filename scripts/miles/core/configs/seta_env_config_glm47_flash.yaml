@@ -1,0 +1,55 @@
+# seta_env env_service config for GLM-4.7-Flash RL training (ablation vs DeepSeek-V4).
+#
+# IDENTICAL to seta_env_config_milesrouter_r3_v4docker.yaml EXCEPT the `model` block:
+# GLM-4.7-Flash uses its own SGLang backend (sglang_glm47_flash) which parses GLM's
+# native <tool_call>name<arg_key>..</arg_key><arg_value>..</arg_value></tool_call>
+# format and GLM chat tokens (<|system|>/<|user|>/<|assistant|>/<|observation|>),
+# instead of DeepSeek-V4's DSML. Everything else (agent, runtime, env, reward_fn binary,
+# max_iteration 60, max_total_tokens 60000, timeouts) is kept the same for the ablation.
+
+terminal_env:
+  model:
+    # Custom backend: hits SGLang /generate directly, parses GLM-4.7 tool-call format.
+    # No SGLang flag changes required (same launch as miles' run_glm47_flash).
+    model_platform: sglang_glm47_flash
+    model_type: /data/models/GLM-4.7-Flash
+    url: http://localhost:30000
+    tito_enabled: false       # this backend does its own token-level TITO
+    model_config_dict:
+      max_new_tokens: 8192
+      temperature: 1.0
+      top_p: 0.95
+
+  agent:
+    agent: tito_train_agent
+    prompt: sys_prompt_base
+    parallel_internal_tools: true
+    # Hard-capped at 60000 (GLM-4.7-Flash original_max_position_embeddings headroom).
+    max_total_tokens: 60000
+    max_completion_tokens: 8192
+    max_iteration: 60       # same as the DeepSeek-V4 run for the ablation
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+
+  runtime:
+    env_type: daytona
+    toolkit: auto
+    # Same per-sandbox caps as the DeepSeek run (MAX_SLOTS=160 budget):
+    #   CPU 160×1=160 ≤ 250 | Mem 160×2=320GB | Disk 160×6=960GB ≤ 2000GB
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 6144
+
+  env:
+    reward_fn: binary
+    task_timeouts:
+      _reset_env: 720.0
+      _reset_agent: 120.0
+      agent_astep: 2400.0
+      _evaluate_completion_sync: 900.0
+      _cleanup: 120.0

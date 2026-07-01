@@ -1,0 +1,107 @@
+experiment_name: seta-kimi-qwen3-sft-thinking
+trial_name: trial0
+
+seed: 1
+enable_offload: false
+total_train_epochs: 3
+tokenizer_path: ${model.path}
+
+cluster:
+  n_nodes: 1
+  n_gpus_per_node: 2
+  # Relative to the working dir where the trainer is launched. Override on
+  # the command line for production runs (e.g. fileroot=/scratch/areal_runs).
+  fileroot: outputs/areal/experiments
+  name_resolve:
+    type: nfs
+    nfs_record_root: outputs/areal/name_resolve
+
+allocation_mode: d2p1t1
+
+model:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: Qwen/Qwen3-8B
+  init_from_scratch: false
+  gradient_checkpointing: true
+  dtype: bfloat16
+  mb_spec:
+    max_tokens_per_mb: 16384
+  optimizer:
+    type: adam
+    lr: 2e-5
+    weight_decay: 0.05
+    beta1: 0.9
+    beta2: 0.95
+    eps: 1e-5
+    lr_scheduler_type: cosine
+    gradient_clipping: 1.0
+
+# train_dataset.path / valid_dataset.path is a HuggingFace Hub dataset id
+# (the dataset must already have been pushed via
+#   build_sft_dataset.py --push-to-hub <repo_id> ).
+#
+# The published dataset has a single `train` split. The loader returns an
+# empty Dataset for `test`, so the AREAL evaluator iterates zero batches.
+#
+# Alternative path forms supported by seta_sft_dataset.get_seta_sft_dataset:
+#   - "<owner>/<name>"     HuggingFace Hub dataset (this file)
+#   - "path/to/sft.jsonl"  local single jsonl (built by build_sft_dataset.py)
+train_dataset:
+  batch_size: 8
+  shuffle: true
+  pin_memory: true
+  num_workers: 4
+  drop_last: true
+  path: camel-ai/seta-sft-kimi-k2.5-thinking
+  type: sft
+  max_length: 16384
+
+valid_dataset:
+  batch_size: 8
+  shuffle: false
+  pin_memory: true
+  num_workers: 4
+  drop_last: false
+  path: camel-ai/seta-sft-kimi-k2.5-thinking
+  type: sft
+  max_length: 16384
+
+# Utilities
+saver:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: null
+
+recover:
+  mode: disabled
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: 3600
+
+evaluator:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: null
+
+stats_logger:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  wandb:
+    mode: disabled
+
+launcher:
+  inference_server_cpus_per_gpu: 4
+  inference_server_mem_per_gpu: 32768
+  trainer_cpus_per_gpu: 4
+  trainer_mem_per_gpu: 32768

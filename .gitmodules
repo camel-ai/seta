@@ -1,15 +1,14 @@
 [submodule "external/camel"]
-    path = external/camel
-    url = https://github.com/camel-ai/camel.git
-    branch = terminal_toolkit_docker
-[submodule "external/rllm"]
-    path = external/rllm
-    url = https://github.com/Michaelsqj/rllm.git
-    branch = v0.2
+	path = external/camel
+	url = https://github.com/camel-ai/camel.git
+	branch = master
 [submodule "external/terminal-bench"]
-    path = external/terminal-bench
-    url = https://github.com/Michaelsqj/terminal-bench.git
-[submodule "external/AReaL"]
-	path = external/AReaL
-	url = https://github.com/inclusionAI/AReaL
-	branch = main
+	path = external/terminal-bench
+	url = https://github.com/Michaelsqj/terminal-bench.git
+[submodule "external/areal"]
+	path = external/areal
+	url = https://github.com/Michaelsqj/AReaL.git
+	branch = terminal_agent
+[submodule "external/harbor"]
+	path = external/harbor
+	url = https://github.com/Michaelsqj/harbor.git

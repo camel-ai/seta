@@ -1,0 +1,26 @@
+# FRP tunnel configuration — single source of truth for multi-machine setups.
+#
+# To add a new GPU machine:
+#   1. Add an entry under gpu_machines with a non-overlapping base_remote_port
+#   2. Run: python manage_tunnel.py validate
+#   3. At training start: python manage_tunnel.py start <name> --ranks "ip:port,..."
+
+relay:
+  host: "31.22.104.81"           # CPU Server 1 runs frps
+  port: 7000                      # frps control port
+  ssh_key: /data1/qijia/.ssh/id_ed25519
+  ssh_user: root
+
+gpu_machines:
+  # Current setup: single GPU machine (local — no ssh_host needed)
+  - name: gpu-a
+    base_remote_port: 39001       # relay ports 39001..39001+num_ranks-1
+    num_ranks: 4                  # port range reservation (actual ranks passed at runtime)
+
+  # Example: adding a second GPU machine later
+  # - name: gpu-b
+  #   ssh_host: "10.0.2.50"      # if set, manage_tunnel.py can start frpc via SSH
+  #   ssh_user: root
+  #   ssh_key: /data1/qijia/.ssh/id_ed25519
+  #   base_remote_port: 39101    # non-overlapping with gpu-a (gap of 100 for headroom)
+  #   num_ranks: 8

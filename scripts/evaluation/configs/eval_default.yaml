@@ -1,0 +1,65 @@
+# Default evaluation config for seta_env.
+#
+# Usage:
+#   python scripts/evaluation/eval.py --config scripts/evaluation/configs/eval_default.yaml
+#
+# Override any field on the command line with key=value syntax:
+#   python scripts/evaluation/eval.py \
+#       --config scripts/evaluation/configs/eval_default.yaml \
+#       terminal_env.model.model_type=Qwen/Qwen3-32B \
+#       terminal_env.model.url=http://localhost:30000/v1 \
+#       workers=8 \
+#       trial_name=my-run-001
+
+# ═══ TerminalEnv config (shared with AReaL) ═══
+terminal_env:
+  model:
+    model_platform: sglang
+    model_type: Qwen/Qwen3-8B
+    url: http://localhost:30000/v1
+    api_key: ""
+    model_config_dict:
+      max_tokens: 4096
+      stream: false
+
+  agent:
+    agent: train_agent
+    prompt: sys_prompt_base
+    max_total_tokens: 28672
+    max_completion_tokens: 4096
+    max_iteration: 30
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+    thinking: true
+
+  runtime:
+    env_type: docker
+    trial_root: ""            # auto-set by eval.py from output_dir/experiment/trial
+    # scheduler_url: "http://127.0.0.1:8000"   # uncomment for remote_docker
+    # node_api_key: harbor-node-dev-key
+
+  env:
+    reward_fn: pass_ratio
+    task_timeouts:
+      _reset_env: 300.0
+      _reset_agent: 120.0
+      agent_astep: 300.0
+      _evaluate_completion_sync: 600.0
+      _cleanup: null
+
+# ═══ Eval-loop settings ═══
+n_trajs: 8
+workers: 3
+seed: 42
+
+dataset: seta-env-v2
+output_dir: outputs/eval
+experiment_name: eval
+trial_name: ""
+rank: 0
+world_size: 1

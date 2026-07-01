@@ -1,0 +1,44 @@
+# Turn 2: INCREASE_DIFFICULTY again on turn 1 output
+# Chain: original → increase_difficulty → increase_difficulty (double-hard)
+#
+# Run AFTER test_increase_difficulty.yaml completes.
+
+huggingface:
+  input_repo: null
+  output_repo: null
+  token_env: HF_TOKEN
+
+paths:
+  input_dir: outputs/evol_increase_difficulty       # reads turn 1 output
+  output_dir: outputs/evol_increase_difficulty_t2   # writes turn 2 output
+  rollout_dir: outputs/evol_increase_difficulty_t2_rollouts
+
+filter_csv: null    # process all PASS variants from turn 1
+
+strategy:
+  name: increase_difficulty_t2
+  evol_strategy: depth
+  evol_target: INCREASE_DIFFICULTY
+  max_variants: 1
+
+pipeline:
+  n_evol_workers: 4
+  skip_timeout: false
+  task_timeout_s: 3600
+
+rollout:
+  enabled: true
+  n_rollout_workers: 4
+  n_trajs: 1
+  model_config_name: azure_gpt54
+
+  model:
+    model_platform: azure
+    model_type: gpt-5.4
+    model_config_dict:
+      max_completion_tokens: 4096
+      stream: false
+      temperature: 1.0
+
+upload:
+  enabled: false

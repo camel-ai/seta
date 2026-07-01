@@ -1,39 +1,18 @@
-#!/bin/bash
 # 1. install miniforge
 SCRIPT_PATH=$(realpath "$0")
 PROJECT_DIR=$(dirname "$SCRIPT_PATH")
-
-# Check if conda is already installed
-if command -v conda &> /dev/null
-then
-  echo "Conda already installed, skipping Miniforge installation."
-  CONDA_BASE="$(conda info --base)"
-  source ${CONDA_BASE}/bin/activate
-else
-  echo "Conda not found, installing Miniforge..."
-  cd $PROJECT_DIR/../
-  curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
-  bash Miniforge3-$(uname)-$(uname -m).sh -b
-  CONDA_BASE="$HOME/miniforge3"
-  source ${CONDA_BASE}/bin/activate
-fi
-
-# Create or activate seta environment
-if conda env list | grep -q "^seta "; then
-  echo "Environment 'seta' already exists, activating..."
-else
-  echo "Creating environment 'seta'..."
-  conda create -n seta python=3.12 -y
-fi
-
-echo "Activating environment 'seta'..."
-conda activate seta
-
-# Install uv if not already installed
-if ! command -v uv &> /dev/null
-then
-  pip install uv
-fi
+#!/bin/bash
+cd $PROJECT_DIR/../
+apt-get update && apt-get install -y libnuma1
+curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+# run the installer without interactive mode, all yes to prompts
+bash Miniforge3-$(uname)-$(uname -m).sh -b
+# initialize conda
+source ~/miniforge3/bin/activate
+conda init
+conda create -n terminal_agent python=3.12 -y
+conda activate terminal_agent
+pip install uv
 # 2. install dependencies
 # if nvcc is not found, install cuda toolkit
 if ! command -v nvcc &> /dev/null
@@ -43,14 +22,17 @@ then
 else
     echo "nvcc found, skipping CUDA toolkit installation."
 fi
+conda install -c conda-forge git-lfs -y
+cd ${PROJECT_DIR}/external/camel && uv pip install -e .
+cd ${PROJECT_DIR}/external/harbor && uv pip install -e .
+cd ${PROJECT_DIR}/external/areal && uv pip install -e .[all]
 
-cd ${PROJECT_DIR}/external/camel && uv pip install --system -e .
-cd ${PROJECT_DIR}/external/terminal-bench && uv pip install --system -e .
-cd ${PROJECT_DIR}/external/AReaL && uv pip install --system -e .[all]
+pip install --no-cache --no-build-isolation flash-attn==2.8.3
+pip install --no-cache --no-build-isolation transformers==4.57.1
+pip install --no-cache --no-build-isolation datasets==4.5.0
+pip install --no-cache --no-build-isolation "numpy<2.3,>=2.0"
 
-uv pip install --system flash-attn==2.8.3
-uv pip install --system -U datasets transformers
-uv pip install --system "numpy<2.3,>=2.0"
+cd ${PROJECT_DIR} && uv pip install -e .
 
 # 3. install docker if not found
 if ! command -v docker &> /dev/null
@@ -85,7 +67,7 @@ sudo tee "$DOCKER_DAEMON_CONFIG" > /dev/null <<EOF
   "default-address-pools": [
     {
       "base": "10.200.0.0/16",
-      "size": 24
+      "size": 28
     }
   ]
 }

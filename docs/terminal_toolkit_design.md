@@ -101,10 +101,6 @@ This is the primary entry point for executing any command.
     * Calls _collect_output_until_idle() to wait for and capture the command's initial output.
     * Returns a formatted string containing the new session ID and this initial output.
 
-### shell_write_content_to_file(content, file_path)
-
-This function writes the specified content to a file at the given path. 
-This tool helps avoid hierarchical quotes error when creating file with `echo`.
 
 ### shell_write_to_process(id, command)
 
@@ -156,7 +152,9 @@ Forcibly terminates a non-blocking session.
 
 ### shell_ask_user_for_help(id, prompt)
 
-Engages a human for assistance. (Disabled in this Terminal Agent project)
+Engages a human for assistance.
+
+
 
 1. Calls _collect_output_until_idle() to get the latest screen state.
 2. Prints the latest output and the LLM's prompt to the console.
