@@ -5,7 +5,7 @@
 
 ***Designing resilient toolkits and scalable RL environments for CAMEL terminal agents***
 
-[![🤗 Dataset](https://img.shields.io/badge/🤗%20Dataset-camel--ai%2FSETA--Env-yellow)](https://huggingface.co/datasets/camel-ai/SETA-Env) [![🤗 Model](https://img.shields.io/badge/🤗%20Model-Qwen3--8B--SETA--Env--RL-blue)](https://huggingface.co/camel-ai/Qwen3-8B-SETA-Env-RL)
+[![🤗 Dataset](https://img.shields.io/badge/🤗%20Dataset-camel--ai%2FSETA--Env-yellow)](https://huggingface.co/datasets/camel-ai/SETA-Env) [![🤗 Model](https://img.shields.io/badge/🤗%20Model-Qwen3--8B--SETA--Env--RL-blue)](https://huggingface.co/camel-ai/Qwen3-8B-SETA-Env-RL) [![arXiv Paper](https://img.shields.io/badge/arXiv-2607.10891-b31b1b.svg)](https://arxiv.org/abs/2607.10891) [![SETA Blog](https://img.shields.io/badge/Notion-SETA%20Blog-black?logo=notion)](https://eigent-ai.notion.site/SETA-Scaling-Environments-for-Terminal-Agents-2d2511c70ba280a9b7c0fe3e7f1b6ab8?source=copy_link)
 
 ----
 
