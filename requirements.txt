@@ -275,7 +275,7 @@ nebula3-python==3.8.2
 neo4j==5.28.2
 nest-asyncio==1.6.0
 networkx==3.5
-nltk==3.9.1
+nltk==3.10.3
 nodeenv==1.9.1
 notion-client==2.4.0
 numpy==1.26.4
