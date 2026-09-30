@@ -1,0 +1,1 @@
+{"label": "<task-dir-name>", "prompt": [{"role": "user", "content": "<contents of <task-dir-name>/instruction.md>"}], "metadata": {"agent_name": "terminus-2", "instance_id": "<task-dir-name>"}}

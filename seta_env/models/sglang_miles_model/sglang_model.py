@@ -191,7 +191,7 @@ class SGLangModel(BaseModelBackend):
         # leak into the /generate sampling_params dict (`dict(self.model_config_dict)`
         # below in _arun) — passing `return_routed_experts` would raise
         # `SamplingParams.__init__() got an unexpected keyword argument` -> 500 on
-        # every generate. GLM trains with R3 disabled (see run_glm47_flash_*).
+        # every generate. GLM trains with R3 disabled (see scripts/miles/examples/glm47_flash_grpo).
         if isinstance(getattr(self, "model_config_dict", None), dict):
             self.model_config_dict.pop("return_routed_experts", None)
             self.model_config_dict.pop("return_indexer_topk", None)

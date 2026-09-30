@@ -1,0 +1,27 @@
+Disable TileLang's aggressive shared-memory merge in the GLM-5 sparse-MLA backward kernel.
+
+With the merge pass on, TileLang can alias shared buffers that are still live,
+and the backward kernel returns NaN dQ/dKV from finite inputs (Hopper and
+Blackwell). LoRA training then reports grad_norm=nan and skips the update.
+
+Base:  radixark/Megatron-Bridge 7f0fb3456f8ffe47599b5fd167b454605d85f932
+Fixed: Michaelsqj/Megatron-Bridge e91c492328700f9cd59b8d1a82d40a5e54fbd835
+
+Apply to your own checkout with:
+  git -C <megatron-bridge checkout> apply <this file>
+
+diff --git a/src/megatron/bridge/models/glm5/tilelang/tilelang_sparse_mla_bwd.py b/src/megatron/bridge/models/glm5/tilelang/tilelang_sparse_mla_bwd.py
+index 2cbeff8f..84ae1c0f 100644
+--- a/src/megatron/bridge/models/glm5/tilelang/tilelang_sparse_mla_bwd.py
++++ b/src/megatron/bridge/models/glm5/tilelang/tilelang_sparse_mla_bwd.py
+@@ -98,7 +98,9 @@ def postprocess(
+     pass_configs={
+         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
+         tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
+-        tilelang.PassConfigKey.TL_ENABLE_AGGRESSIVE_SHARED_MEMORY_MERGE: True,
++        # TileLang can alias still-live shared buffers in this backward kernel,
++        # producing NaN dQ/dKV on Hopper as well as Blackwell.
++        tilelang.PassConfigKey.TL_ENABLE_AGGRESSIVE_SHARED_MEMORY_MERGE: False,
+     },
+ )
+ def bwd(

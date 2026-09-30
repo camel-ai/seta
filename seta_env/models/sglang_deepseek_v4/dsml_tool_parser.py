@@ -3,10 +3,9 @@
 DeepSeek-V4 emits tool calls in its native DSML format (FULLWIDTH VERTICAL LINE
 sentinels), not Hermes XML. We parse it directly so SGLang doesn't need
 ``--tool-call-parser deepseek`` set (which would diverge from miles' default
-SGLang launch flags in ``run_deepseek_v4.py``).
+SGLang launch flags in Miles' ``scripts/run_deepseek_v4.py``).
 
-Format (verified against an actual /v1/chat/completions response, see
-``/tmp/harbor/trials/stage2_smoke/.../conv_*.json``)::
+Format (verified against an actual /v1/chat/completions response)::
 
     <｜DSML｜tool_calls>
     <｜DSML｜invoke name="shell_exec">

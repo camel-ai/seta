@@ -277,7 +277,7 @@ class TerminalEnvironment:
 
             # Dump TITO state if the underlying model exposes it
             # (DeepSeekV4SGLangModel does; the OpenAI-compat path doesn't).
-            # Used by scripts/miles/stage2/audit_tito.py to verify token alignment.
+            # Used to audit token alignment between the agent and the trainer.
             if hasattr(self, 'output_path') and hasattr(self, 'agent'):
                 try:
                     mb = getattr(self.agent, 'model_backend', None)
@@ -296,7 +296,7 @@ class TerminalEnvironment:
             # (DeepSeekV4SGLangModel accumulates cached_tokens / prompt_tokens
             # across every /generate call within the trajectory's agent loop).
             # Shape matches miles' Sample.PrefixCacheInfo.add() expectations,
-            # so generate_with_camel can forward it directly.
+            # so the Miles generate function (scripts/miles/common/env_service_generate.py) can forward it directly.
             cache_stats: dict | None = None
             if hasattr(self, 'agent'):
                 try:

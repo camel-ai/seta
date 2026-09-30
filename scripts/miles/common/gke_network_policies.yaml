@@ -1,0 +1,124 @@
+# Egress control for Harbor sandboxes on GKE (SANDBOX_BACKEND=gke), for one namespace.
+#
+#   bash gke_cluster.sh apply-network-policies                  # applies these to GKE_NAMESPACE
+#   bash gke_cluster.sh apply-network-policies --no-web-egress  # the same without allow-sandbox-web-egress
+#
+# Enforced by GKE Dataplane V2 (gke_cluster.sh create enables it). NetworkPolicies add up: whatever
+# no policy below allows is blocked, for every pod in the namespace, so keep other workloads out of
+# it. Harbor reaches sandboxes through the Kubernetes API (exec), which these do not affect.
+#
+# Once applied, set GKE_CLUSTER_DEFAULT_DENY_EGRESS=true when the Harbor pin supports it: Harbor
+# then also runs tasks that ask for network_mode = "no-network", labelling their pods so that
+# allow-sandbox-web-egress skips them.
+---
+# Nothing in, nothing out, unless a policy below allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Cluster DNS for every pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Public web (TCP 80/443) for sandboxes: tasks install packages and many test scripts download
+# their tools. Private, link-local (includes the metadata server), carrier-grade NAT and benchmark
+# ranges stay blocked, so a sandbox cannot reach your VPC, the nodes or the training cluster.
+# Tasks that ask for no network are excluded (Harbor labels their pods).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-sandbox-web-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: sandbox
+    matchExpressions:
+      - key: harbor-network-mode
+        operator: NotIn
+        values:
+          - no-network
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+---
+# Compose (multi-container) tasks run in a Docker-in-Docker pod (label mode=dind). Its Docker daemon
+# pulls the task's service images, logging in to Artifact Registry with a token from the GKE
+# metadata server. The task's own containers get Harbor's Compose network settings.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-compose-registry-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: sandbox
+      mode: dind
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    # GKE metadata server (Workload Identity): 169.254.169.254:80 with Dataplane V2,
+    # 169.254.169.252:988 on other dataplanes.
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+      ports:
+        - protocol: TCP
+          port: 988

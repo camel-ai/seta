@@ -1,139 +1,101 @@
-# Miles RL training for the Terminal Agent
+# Miles training for terminal agents
 
-RL (GRPO) training of terminal/CAMEL agents on the **seta_env** environment using the
-[miles](https://github.com/radixark/miles) framework, with a **disaggregated, session-server**
-rollout architecture and **Daytona** sandboxes for environment execution.
+Reinforcement-learning recipes that train LLMs as terminal agents with the
+[Miles](https://github.com/radixark/miles) framework. Every example is a self-contained
+folder with a step-by-step README (container, Ray cluster, model, sandboxes, dataset, settings,
+launch), an `env.example` for your keys and paths, and the launch script(s).
 
-Two models are wired up end-to-end:
+## Examples
 
-| Model | Launcher | Image |
-|---|---|---|
-| **GLM-4.7-Flash** | `run_glm47_flash_seta_session_server.{py,sh}` | main miles image |
-| **DeepSeek-V4-Flash-FP8** | `run_deepseek_v4_seta_session_server.{py,sh}` | DeepSeek-V4 image (`*_v4docker` variants) |
+| Example | Model | Algorithm | Agent · rollout path | Hardware |
+|---|---|---|---|---|
+| [deepseek_v4_grpo](examples/deepseek_v4_grpo/README.md) | DeepSeek-V4-Flash (FP8) | GRPO, full fine-tuning | Terminus-2 · Harbor agent server<br>seta CAMEL agent · seta env_service | 8 × 8 H200 |
+| [glm47_flash_grpo](examples/glm47_flash_grpo/README.md) | GLM-4.7-Flash | GRPO, full fine-tuning | seta CAMEL agent · seta env_service | 8 × 8 H200 |
+| [glm5_2_lora_grpo](examples/glm5_2_lora_grpo/README.md) | GLM-5.2 (744B-A40B) | GRPO, LoRA | Terminus-2 · Harbor agent server | 4 × 8 H200 (or 8) |
+| [inkling_grpo](examples/inkling_grpo/README.md) | Inkling-Small (276B MoE) | GRPO, full fine-tuning | CAMEL or Terminus-2 · Harbor agent server | 8 × 8 H200 |
+| [qwen3_8_27b_grpo](examples/qwen3_8_27b_grpo/README.md) | Qwen3.8-27B | GRPO, full fine-tuning, 128k context | Terminus-2 · Harbor agent server | 4 × 8 H200 |
+| [qwen3_8_27b_ppo](examples/qwen3_8_27b_ppo/README.md) | Qwen3.8-27B | PPO (actor + critic), full fine-tuning | Terminus-2 · Harbor agent server | 4 × 8 H200 |
 
-> Naming convention: `*_v4docker` scripts target the **DeepSeek-V4 image**; the ones without the
-> `v4docker` suffix run on the **normal main image**.
+Each script records the Docker image, Miles commit and (for Harbor) Harbor commit it was run
+with, and warns when your checkout differs (`STRICT_PINS=1` makes that an error).
 
----
+## How a rollout works
 
-## Architecture
+Two rollout paths are supported. Both let Miles train on the exact tokens the model generated
+(token-in/token-out through Miles' session server) while an agent solves a task in a sandbox and a
+verifier scores it.
 
 ```
- ┌─────────────── Ray cluster (8 nodes) ───────────────┐
- │  train nodes (Megatron)   ⇄   serve nodes (SGLang)  │   disaggregated
- └───────────────────────────┬─────────────────────────┘
-                             │  session server (TITO capture)  ── miles/native router
-                             ▼
-                        env_service  (FastAPI, :8002)
-                             │  POST /step  (per-trajectory session URL)
-                             ▼
-                        Daytona sandboxes  (one per rollout trajectory)
+             Ray cluster (Miles: Megatron training + SGLang engines)
+                               │  session server (per-trajectory OpenAI-compatible URL)
+                               ▼
+   ┌─────────────── Harbor agent server ───────────────┐   or   ┌──── seta env_service ────┐
+   │ python -m harbor.agent_server                     │        │ seta_env.services         │
+   │ agent: Harbor Terminus-2 or CAMEL                 │        │ agent: seta CAMEL agent   │
+   │ sandboxes: Daytona · Modal · GKE · Docker         │        │ sandboxes: Daytona        │
+   └───────────────────────────────────────────────────┘        └───────────────────────────┘
+                               │  verifier reward → Miles reward
 ```
 
-- **env_service** (`core/env_service.sh` → `seta_env.services.env_service`) orchestrates Daytona
-  sandboxes, builds task environments from `DATASET_ROOT/<dataset>/<task>`, runs the agent per
-  `POST /step`, and grades the trajectory.
-- **Session server** (miles) captures token-in/token-out (TITO) so training sees the exact tokens the
-  model generated; the agent talks OpenAI-compatible to a per-trajectory session URL.
-- **Rollout** is fully-async (1-step-off): training and rollout run concurrently on separate nodes.
+- **Harbor agent server**: each sample is posted to `POST /run`; Harbor starts the task's
+  sandbox (`SANDBOX_BACKEND=daytona|modal|gke|docker`), runs the agent against the session URL,
+  runs the task's tests and returns the reward. Tasks are
+  [Harbor task directories](https://github.com/harbor-framework/harbor). GKE support
+  (cluster creation, sandbox image, scaling) is in `common/gke_cluster.sh`.
+- **seta env_service**: the seta environment service (see [docs/env_service.md](../../docs/env_service.md))
+  runs seta's CAMEL terminal agent per `POST /step`.
 
-## Folder layout
+## Layout
 
 ```
 scripts/miles/
-├── README.md                       # this file
-├── PATCHES.md                      # V4-DOCKER-specific in-container patch notes
-├── run_*_session_server.{py,sh}    # session-server launchers (GLM-4.7-Flash, DeepSeek-V4)
-├── run_deepseek_v4_*               # DeepSeek-V4 variants (aime/seta, sync/async, v4docker)
-├── run_glm47_flash_*               # GLM-4.7-Flash variants
-├── eval_v4_flash_tb.sh             # terminal-bench eval
-├── core/                           # modules the run scripts import + serve config
-│   ├── seta_agent_function.py      #   --custom-agent-function-path (session-server agent)
-│   ├── fully_async_rollout_seta.py #   --rollout-function-path (async worker)
-│   ├── generate_with_camel.py      #   --custom-generate-function-path (sync path)
-│   ├── reward_func.py              #   --custom-rm-path
-│   ├── group_reward_filter.py      #   --dynamic-sampling-filter-path (zero-std / env-fail drop)
-│   ├── camel_rollout_metrics.py    #   --custom-rollout-log-function-path
-│   ├── env_service.sh              #   env_service launcher (tmux)
-│   └── configs/                    #   seta_env_config_*.yaml (per-model env configs)
-└── utils/                          # reusable helpers NOT used by run scripts
-    ├── daytona_cleanup_ours.py     #   delete our Daytona sandboxes (DELETE=1)
-    ├── daytona_watchdog.py         #   monitor Daytona capacity
-    ├── tito_state_cleanup_loop.sh  #   reclaim tito_state.json disk
-    ├── recovery_monitor.py, cleanup_run_artifacts.py, ...
+├── README.md                this index
+├── cluster.example.yaml     Ray head/worker IPs (alternative to HEAD_IP)
+├── common/                  code shared by all examples
+├── data/                    prompt-file format, small example files (examples only)
+└── examples/<model>_<algorithm>/
+    ├── README.md            full setup and launch walkthrough
+    ├── env.example          copy to .env and fill in (keys, paths, cluster)
+    ├── run_*.sh             launch script(s), one per rollout path / agent
+    └── train.py             builds and submits the Miles job
 ```
 
-Run scripts reference core modules by package path (`core.seta_agent_function.run`, …); `scripts/miles`
-is on `PYTHONPATH`, so `core` resolves as a package.
+`common/`:
 
----
+| File | Purpose |
+|---|---|
+| `launcher.sh` | shell helpers used by every run script: settings file, run folder, dry run, Ray, pins, W&B, Harbor install/configure/start |
+| `harbor_agent.py` | Miles agent function (`--custom-agent-function-path common.harbor_agent.run`), posts each sample to the Harbor agent server; `abort` cancels surplus trials |
+| `harbor_rollout.py` | reward function, infrastructure-failure filters, rollout metrics |
+| `harbor_abort.py` | generate wrapper that cancels surplus Harbor trials when a batch is full |
+| `harbor_server.sh`, `harbor_install.sh` | start the agent server; install Harbor at a pinned commit |
+| `harbor_gke_environment.py`, `gke_cluster.sh`, `gke_tools_image.sh`, `gke_network_policies.yaml` | GKE sandbox backend |
+| `env_service_*.py`, `env_service.sh` | seta env_service rollout path |
+| `build_prompt_dataset.py` | build a prompt JSONL from Harbor task directories |
+| `export_to_hf.sh`, `complete_hf_export.py` | export a trained checkpoint to Hugging Face format |
 
-## Prerequisites
+## Data
 
-1. **8-node Ray cluster**, already bootstrapped, reachable at `HEAD_IP` (default in each `.sh`).
-   External Ray is used (`MILES_SCRIPT_EXTERNAL_RAY=1`).
-2. **Credentials in `~/.bashrc`** (sourced by the launchers; never printed):
-   - `DAYTONA_API_KEY`, `DAYTONA_API_URL` — Daytona sandboxes
-   - `WANDB_API_KEY` — metrics
-   - `HF_TOKEN` — model + dataset download
-3. **Model prepared** — downloaded + converted to a Megatron torch-dist checkpoint (see below).
-4. **Task dataset registered** under `DATASET_ROOT` (default `dataset/`) as
-   `DATASET_ROOT/<dataset_name>/<task_name>/` harbor task dirs, plus a parquet listing the tasks.
+Training needs a prompt file (`PROMPT_DATA`) and the matching task directories (`TASKS_DIR`).
+See [data/README.md](data/README.md). The files shipped there come from public benchmarks and are
+**examples only**; train on your own task set, for example
+[SETA-Env](https://huggingface.co/datasets/camel-ai/SETA-Env).
 
-## 1. Prepare the model (one-time)
+## Common settings
 
-Downloads the HF checkpoint and converts it to `_torch_dist`:
+Every example reads the same core variables (full list in each README):
 
-```bash
-python scripts/miles/run_glm47_flash_seta_session_server.py prepare      # GLM-4.7-Flash
-python scripts/miles/run_deepseek_v4_seta_session_server.py prepare      # DeepSeek-V4-Flash-FP8
-```
+| Variable | Meaning |
+|---|---|
+| `HEAD_IP` or `CLUSTER_CONFIG` | Ray head node |
+| `MODEL_ROOT` | where the prepared model lives (default `/root/models`) |
+| `PROMPT_DATA`, `TASKS_DIR` | training prompts and their Harbor task directories |
+| `SANDBOX_BACKEND` | `daytona` (default), `modal`, `gke` or `docker` |
+| `WANDB_API_KEY`, `WANDB_PROJECT`, `WANDB_ENTITY` | optional W&B logging |
+| `RUNS_ROOT`, `RUN_NAME` | outputs go to `$RUNS_ROOT/$RUN_NAME/` (default `./runs/<example>-<timestamp>`) |
+| `DRY_RUN=1` | print the resolved training command and exit |
 
-Outputs land in `--model-dir` (default `/data/models`): `<model>/` (HF) and `<model>_torch_dist/`.
+## Acknowledgements
 
-## 2. Dataset
-
-Each rollout resolves its environment as `DATASET_ROOT/<dataset_name>/<task_name>`, where
-`dataset_name = CAMEL_DATASET_NAME` and `task_name = metadata.instance_id` from the parquet.
-
-- Place harbor task dirs (each with `task.toml`, `instruction.md`, `environment/Dockerfile`,
-  `tests/`, `solution/`) under `DATASET_ROOT/<dataset_name>/`.
-- Build a parquet with columns `prompt` (the instruction), `label` (the task id/slug), and
-  `metadata = {"instance_id": <slug>, "agent_name": "tito_train_agent"}`.
-- Point the launcher at it via `seta_env_parquet_path` (`--prompt-data`) and set
-  `CAMEL_DATASET_NAME=<dataset_name>`.
-
-## 3. Launch training
-
-The `.sh` restarts `env_service` (Daytona) then submits the Ray job:
-
-```bash
-bash scripts/miles/run_glm47_flash_seta_session_server.sh      # GLM-4.7-Flash
-bash scripts/miles/run_deepseek_v4_seta_session_server.sh      # DeepSeek-V4-Flash-FP8
-```
-
-Common overrides (env vars): `NUM_NODES` (default 8), `HEAD_IP`, `CAMEL_DATASET_NAME`,
-`ROLLOUT_CONCURRENCY`, `MAX_SLOTS` (Daytona sandbox cap), `WANDB_PROJECT/GROUP`.
-
-Run artifacts land in `RUN_ROOT` (default `/data/training_runs/<run>`): `checkpoints/`, `trials/`
-(per-trajectory transcripts + `run_info.json`), `env_service/env_service.log`, `wandb/`, `ray_job.log`.
-
-## 4. Config knobs
-
-Each model has an env config in `core/configs/` (e.g. `seta_env_config_session_server_glm47.yaml`):
-`model_platform: tito`, tool/reasoning parsers, `max_iteration`, `max_parallel_tool_calls`, sandbox
-`override_cpus/memory/storage`. Training knobs live in the launcher `.py` (`ScriptArgs`):
-node split (`rollout_num_nodes`), `rollout-batch-size` × `n-samples-per-prompt`, `ROLLOUT_CONCURRENCY`,
-`max_weight_staleness`, tp/pp/ep parallelism.
-
-**Throughput note:** rollout is Daytona/tool-exec bound (each trajectory is a multi-turn agent loop).
-Size the train/serve node split and `ROLLOUT_CONCURRENCY`/`MAX_SLOTS` so the trainer isn't starved; see
-the `utils/` monitors and the launcher comments for the current defaults.
-
-## Utilities (`utils/`)
-
-- `daytona_cleanup_ours.py` — `DELETE=1 python utils/daytona_cleanup_ours.py` deletes only our
-  sandboxes (by owner label); dry-run by default.
-- `tito_state_cleanup_loop.sh` — periodic reclaim of `tito_state.json` under `training_runs/`.
-- `daytona_watchdog.py`, `recovery_monitor.py`, `env_service_watchdog.sh`,
-  `cleanup_run_artifacts.py` — operational monitors/cleaners.
+The Miles training pipeline was built in collaboration with the RadixArk
+[Miles](https://github.com/radixark/miles) team.

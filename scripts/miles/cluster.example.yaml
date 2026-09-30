@@ -1,0 +1,10 @@
+# External Ray cluster for the Harbor recipes: pass it as CLUSTER_CONFIG, or set HEAD_IP instead.
+# The launcher reads head.ip (Ray head, Miles master, Harbor agent server host).
+# Worker entries are informational; start Ray on every node before launching.
+gpus_per_node: 8
+head:
+  ip: 192.0.2.10
+workers:
+  - ip: 192.0.2.11
+  - ip: 192.0.2.12
+  - ip: 192.0.2.13

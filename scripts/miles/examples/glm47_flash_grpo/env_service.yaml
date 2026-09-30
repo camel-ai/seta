@@ -1,0 +1,61 @@
+# seta env_service settings for run_env_service.sh: seta's CAMEL agent driving GLM-4.7-Flash
+# in Daytona sandboxes. The env_service reads this file once at start (ENV_SERVICE_CONFIG).
+
+terminal_env:
+  model:
+    # OpenAI-compatible client that keeps the exact session history (reasoning included),
+    # as the Miles session server needs to record token-in/token-out. Tool calls and
+    # reasoning are parsed by SGLang, not by the client.
+    model_platform: tito
+    tito_enabled: true
+    tito_validate: true
+    model_type: GLM-4.7-Flash         # model name sent with each request
+    url: http://localhost:30000       # placeholder: every /step request brings its session URL
+    # Sampling settings of every model call (Miles' --rollout-temperature does not apply here).
+    model_config_dict:
+      max_tokens: 8192
+      temperature: 1.0
+      top_p: 0.95
+      stream: false
+
+  agent:
+    agent: tito_train_agent
+    prompt: sys_prompt_base
+    # One tool call per turn. max_parallel_tool_calls is what enforces it: extra calls in a
+    # turn are rejected with a short stub result. parallel_internal_tools only chooses
+    # between concurrent and sequential execution.
+    parallel_internal_tools: false
+    max_parallel_tool_calls: 1
+    # Stop a trajectory at 60000 tokens of context (prompt + all turns), below the model's
+    # original_max_position_embeddings with headroom.
+    max_total_tokens: 60000
+    max_completion_tokens: 8192
+    max_iteration: 60
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+
+  runtime:
+    env_type: daytona
+    toolkit: auto
+    # Every sandbox gets 1 CPU / 2 GB RAM / 10 GB disk whatever its task.toml asks for. At
+    # MAX_SLOTS=400 (run_env_service.sh) that is up to 400 CPUs, 800 GB RAM and 4 TB disk
+    # on Daytona at once: lower MAX_SLOTS to fit your organization's limits.
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 10240
+
+  env:
+    reward_fn: binary              # 1 if every test of the task passes, else 0
+    task_timeouts:
+      _reset_env: 720.0            # sandbox creation and task setup
+      _reset_agent: 120.0
+      agent_astep: 2400.0          # the whole agent run; the result is still verified
+      _evaluate_completion_sync: 900.0
+      _cleanup: 120.0
+      # 720 + 120 + 2400 + 900 + 120 = 4260 s, below STEP_TIMEOUT_SECONDS (5000) in
+      # run_env_service.sh.

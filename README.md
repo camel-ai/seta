@@ -78,25 +78,28 @@ python -m areal.launcher.local \
 
 ### Training (Miles)
 
-RL (GRPO) training on the seta_env env service with the
-[miles](https://github.com/radixark/miles) framework — disaggregated, session-server rollout with
-Daytona sandboxes. Two models are wired up end-to-end:
+RL training of terminal agents with the [Miles](https://github.com/radixark/miles) framework.
+Rollouts run through the Harbor agent server (Harbor's Terminus-2 or CAMEL agent in Daytona, Modal,
+GKE or Docker sandboxes) or through the seta env_service. Each example folder has a step-by-step
+README covering the container, Ray cluster, model preparation, sandboxes, dataset and launch:
+
+| Example | Model | Algorithm |
+|---|---|---|
+| [deepseek_v4_grpo](scripts/miles/examples/deepseek_v4_grpo/README.md) | DeepSeek-V4-Flash | GRPO |
+| [glm47_flash_grpo](scripts/miles/examples/glm47_flash_grpo/README.md) | GLM-4.7-Flash | GRPO |
+| [glm5_2_lora_grpo](scripts/miles/examples/glm5_2_lora_grpo/README.md) | GLM-5.2 | LoRA GRPO |
+| [inkling_grpo](scripts/miles/examples/inkling_grpo/README.md) | Inkling-Small | GRPO |
+| [qwen3_8_27b_grpo](scripts/miles/examples/qwen3_8_27b_grpo/README.md) | Qwen3.8-27B | GRPO |
+| [qwen3_8_27b_ppo](scripts/miles/examples/qwen3_8_27b_ppo/README.md) | Qwen3.8-27B | PPO |
 
 ```bash
-# 1. one-time: download + convert the model to a torch-dist checkpoint
-python scripts/miles/run_glm47_flash_seta_session_server.py prepare     # GLM-4.7-Flash
-python scripts/miles/run_deepseek_v4_seta_session_server.py prepare     # DeepSeek-V4-Flash-FP8
-
-# 2. launch training (restarts env_service + submits the Ray job across the cluster)
-bash scripts/miles/run_glm47_flash_seta_session_server.sh               # GLM-4.7-Flash
-bash scripts/miles/run_deepseek_v4_seta_session_server.sh               # DeepSeek-V4-Flash-FP8
-
-# results → /data/training_runs/<run>/ (checkpoints, trials, wandb, ray_job.log)
+cd scripts/miles/examples/qwen3_8_27b_grpo
+cp env.example .env            # fill in cluster, model, data, sandbox and W&B settings
+DRY_RUN=1 bash run_harbor_terminus2.sh   # print the resolved command
+bash run_harbor_terminus2.sh
 ```
 
-Requires an 8-node Ray cluster, `DAYTONA_*` / `WANDB_API_KEY` / `HF_TOKEN` in `~/.bashrc`, and a task
-dataset registered under `DATASET_ROOT`. Full setup, config layout, dataset format, and tuning are in
-**[scripts/miles/README.md](scripts/miles/README.md)**.
+See **[scripts/miles/README.md](scripts/miles/README.md)** for the index, rollout paths and shared code.
 
 ## Docs
 
@@ -107,7 +110,7 @@ dataset registered under `DATASET_ROOT`. Full setup, config layout, dataset form
 - [Env Service](docs/env_service.md) — remote TerminalEnvironment execution on CPU servers
 - [Results](docs/results.md) — what each evaluation records and what the fields mean
 - [Training](docs/training.md) — AReaL RL training
-- [Miles Training](scripts/miles/README.md) — miles RL training (GLM-4.7-Flash, DeepSeek-V4) via env_service + Daytona
+- [Miles Training](scripts/miles/README.md) — Miles RL training examples (DeepSeek-V4, GLM-4.7-Flash, GLM-5.2, Inkling, Qwen3.8) via the Harbor agent server or env_service
 
 ## Experiments
 
@@ -115,8 +118,8 @@ dataset registered under `DATASET_ROOT`. Full setup, config layout, dataset form
 
 ## Acknowledgements
 
-The miles-based RL training pipeline (`scripts/miles/`, the seta_env session-server wiring, and the
-Daytona environment integration) was built in collaboration with the **RadixArk miles team**. Thank
+The Miles-based RL training pipeline (`scripts/miles/`, the Harbor agent-server and seta_env session-server wiring, and the
+sandbox integrations) was built in collaboration with the **RadixArk miles team**. Thank
 you for the [miles](https://github.com/radixark/miles) framework and for the support throughout.
 
 # Citation

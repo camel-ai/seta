@@ -1,0 +1,61 @@
+# seta env_service settings for run_env_service.sh: the seta CAMEL agent driving
+# DeepSeek-V4-Flash-FP8 in Daytona sandboxes. env_service reads this file at start.
+
+terminal_env:
+  model:
+    # OpenAI-compatible client that keeps the exact session history (reasoning included),
+    # which the Miles session server needs to record token-in/token-out.
+    model_platform: tito
+    tito_enabled: true
+    tito_validate: true
+    model_type: DeepSeek-V4-Flash-FP8   # model name sent with each request
+    url: http://localhost:30000         # placeholder: every /step request brings its session URL
+    model_config_dict:
+      max_tokens: 8192
+      temperature: 1.0
+      top_p: 0.95
+      stream: false
+      # No thinking_mode / reasoning_effort here: the session server owns the chat encoding.
+
+  agent:
+    agent: tito_train_agent
+    prompt: sys_prompt_base
+    # Run the independent tool calls of one turn concurrently.
+    parallel_internal_tools: true
+    # The model's original context is 65536 tokens; longer trajectories overflow Megatron's
+    # RoPE cache and crash training, so stop the agent below that with some headroom.
+    max_total_tokens: 60000
+    max_completion_tokens: 8192
+    max_iteration: 200
+    tool_names:
+      - shell_exec
+      - shell_view
+      - shell_wait
+      - shell_write_to_process
+      - shell_kill_process
+      - shell_write_content_to_file
+
+  runtime:
+    env_type: daytona
+    toolkit: auto
+    # Every sandbox gets 1 CPU / 2 GB RAM / 6 GB disk whatever its task.toml asks for, so that
+    # MAX_SLOTS (160) sandboxes fit a Daytona organization quota: 160 CPUs, 320 GB RAM, 960 GB disk.
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 6144
+
+  env:
+    reward_fn: binary
+    task_timeouts:
+      # Sandbox creation. Must stay above the create retry window (CREATE_CAPACITY_MAX_ATTEMPTS)
+      # so a full Daytona runner pool surfaces as a clean "no available runners" error. A much
+      # longer wait also hurts: when many sandboxes finish at once the pool scales down, and
+      # creates that only wait (instead of failing and retrying) never trigger a scale-up.
+      _reset_env: 720.0
+      _reset_agent: 120.0
+      # The whole agent run. Under full load one turn takes up to ~47 s (p95), so this covers
+      # about 50 turns; a trajectory that runs longer is cut off here.
+      agent_astep: 2400.0
+      _evaluate_completion_sync: 900.0
+      _cleanup: 120.0
+      # 720 + 120 + 2400 + 900 + 120 = 4260 s, below STEP_TIMEOUT_SECONDS (5000) in run_env_service.sh.

@@ -684,7 +684,7 @@ class StepRequest(BaseModel):
     # into model_config_dict so DeepSeekV4SGLangModel adds the corresponding
     # flags to its SGLang /generate payload and captures
     # meta_info.{routed_experts, indexer_topk} into tito_state.json.
-    # generate_with_camel.py reads these from miles args (use_rollout_routing_replay
+    # scripts/miles/common/env_service_generate.py reads these from miles args (use_rollout_routing_replay
     # / use_rollout_indexer_replay) and passes them through.
     return_routed_experts: bool = False
     return_indexer_topk: bool = False
@@ -697,7 +697,7 @@ class StepResponse(BaseModel):
     # miles Sample-shaped data ready for the custom-generate-fn adapter to copy
     # onto a Sample instance. None when the underlying model doesn't expose
     # `dump_tito_state` (e.g. OpenAI-compat path) or when the trajectory failed
-    # before the agent ran. See scripts/miles/docs/sample_contract.md.
+    # before the agent ran.
     sample: dict | None = None
 
 

@@ -3,7 +3,7 @@
 Talks directly to SGLang's native ``/generate`` endpoint (token-in / token-out)
 and parses DeepSeek-V4's native DSML tool-call format. Designed to work with
 the same SGLang server miles spins up internally — no SGLang flag changes
-required (per the rule: never modify ``run_deepseek_v4.py`` config).
+required beyond Miles' own DeepSeek-V4 launcher (``scripts/run_deepseek_v4.py`` in Miles).
 
 Compared to ``sglang_miles_model.SGLangModel`` (which targets Qwen3 + Hermes XML):
 
@@ -151,7 +151,7 @@ class DeepSeekV4SGLangModel(BaseModelBackend):
         """
         thinking_mode: "thinking" (default) or "chat".
             Matches miles' deepseek-v4 launcher default
-            (run_deepseek_v4.py:404 sets thinking=true on apply_chat_template).
+            (Miles' scripts/run_deepseek_v4.py sets thinking=true on apply_chat_template).
             "thinking" mode lets the model emit <think>…</think> blocks before
             tool calls / final answers; "chat" suppresses them.
 
@@ -200,8 +200,8 @@ class DeepSeekV4SGLangModel(BaseModelBackend):
         # token_count = len(input_ids) + len(generated_tokens) at the time of
         # the last /generate call, i.e. the seqlen used to slice [: seqlen-1].
         self._last_routing_token_count: int = 0
-        # Routing buffer SHAPES, so downstream decode (generate_with_camel,
-        # build_rollout_dump) is self-describing instead of hardcoding per-model
+        # Routing buffer SHAPES, so downstream decode (the Miles generate function,
+        # scripts/miles/common/env_service_generate.py) is self-describing instead of hardcoding per-model
         # constants. routed_experts is (seqlen-1, num_hidden_layers,
         # num_experts_per_tok) — SGLang does NOT return its shape, so we source
         # it from the model config. indexer_topk's num_layers DOES come back
@@ -389,8 +389,6 @@ class DeepSeekV4SGLangModel(BaseModelBackend):
         The TokenManager internally tracks loss_mask per-token over the full
         sequence (prompt=0, response=1, tool-result=0). We slice off the first
         prompt segment to get the miles-shaped response-only arrays.
-
-        See `scripts/miles/docs/sample_contract.md` for the full contract.
         """
         import json
         from pathlib import Path as _Path
@@ -521,13 +519,13 @@ class DeepSeekV4SGLangModel(BaseModelBackend):
             # R3 routing capture (None if not enabled or SGLang server missing
             # --enable-return-routed-experts). The b64 buffer is the LAST
             # /generate call's full-trajectory buffer; token_count is the
-            # seqlen used for the [: seqlen-1] slice. Downstream
-            # build_rollout_dump.py decodes and validates alignment.
+            # seqlen used for the [: seqlen-1] slice; the Miles side decodes it
+            # and validates the alignment.
             "rollout_routed_experts_b64": self._last_routed_experts_b64,
             "rollout_indexer_topk_b64": self._last_indexer_topk_b64,
             "rollout_routing_token_count": self._last_routing_token_count,
             # Self-describing routing buffer shapes so downstream consumers
-            # (generate_with_camel, build_rollout_dump) decode without hardcoded
+            # (scripts/miles/common/env_service_generate.py) decode without hardcoded
             # per-model constants. routed_experts dims come from the model
             # config; indexer dims from the server + buffer length.
             "rollout_routed_experts_num_layers": self._routed_experts_num_layers,

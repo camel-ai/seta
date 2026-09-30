@@ -60,3 +60,9 @@ seta_env/services/frp_tunnel/frp/
 
 # Env service node config (contains IPs — varies per deployment)
 seta_env/services/nodes.yaml
+
+# Miles example settings (API keys)
+scripts/miles/examples/*/.env
+
+# Python virtualenvs (e.g. the env_service venv)
+.venv/
