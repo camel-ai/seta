@@ -66,9 +66,11 @@ init_run() {
 
 dry_run_exit() {
   [[ "${DRY_RUN:-0}" == 1 ]] || return 0
-  printf 'DRY_RUN=1, resolved command:\n'
-  printf '%q ' "$@"
-  printf '\n'
+  local cmd
+  cmd=$(printf '%q ' "$@")
+  # Do not echo secrets: mask the W&B key if it is part of the command.
+  [[ -z "${WANDB_API_KEY:-}" ]] || cmd=${cmd//"${WANDB_API_KEY}"/'<WANDB_API_KEY>'}
+  printf 'DRY_RUN=1, resolved command:\n%s\n' "${cmd}"
   exit 0
 }
 

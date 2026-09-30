@@ -88,6 +88,7 @@ README covering the container, Ray cluster, model preparation, sandboxes, datase
 | [deepseek_v4_grpo](scripts/miles/examples/deepseek_v4_grpo/README.md) | DeepSeek-V4-Flash | GRPO |
 | [glm47_flash_grpo](scripts/miles/examples/glm47_flash_grpo/README.md) | GLM-4.7-Flash | GRPO |
 | [glm5_2_lora_grpo](scripts/miles/examples/glm5_2_lora_grpo/README.md) | GLM-5.2 | LoRA GRPO |
+| [glm5_2_lora_ppo](scripts/miles/examples/glm5_2_lora_ppo/README.md) | GLM-5.2 | LoRA PPO |
 | [inkling_grpo](scripts/miles/examples/inkling_grpo/README.md) | Inkling-Small | GRPO |
 | [qwen3_8_27b_grpo](scripts/miles/examples/qwen3_8_27b_grpo/README.md) | Qwen3.8-27B | GRPO |
 | [qwen3_8_27b_ppo](scripts/miles/examples/qwen3_8_27b_ppo/README.md) | Qwen3.8-27B | PPO |

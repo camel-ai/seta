@@ -12,6 +12,7 @@ launch), an `env.example` for your keys and paths, and the launch script(s).
 | [deepseek_v4_grpo](examples/deepseek_v4_grpo/README.md) | DeepSeek-V4-Flash (FP8) | GRPO, full fine-tuning | Terminus-2 · Harbor agent server<br>seta CAMEL agent · seta env_service | 8 × 8 H200 |
 | [glm47_flash_grpo](examples/glm47_flash_grpo/README.md) | GLM-4.7-Flash | GRPO, full fine-tuning | seta CAMEL agent · seta env_service | 8 × 8 H200 |
 | [glm5_2_lora_grpo](examples/glm5_2_lora_grpo/README.md) | GLM-5.2 (744B-A40B) | GRPO, LoRA | Terminus-2 · Harbor agent server | 4 × 8 H200 (or 8) |
+| [glm5_2_lora_ppo](examples/glm5_2_lora_ppo/README.md) | GLM-5.2 (744B-A40B) | PPO (LoRA actor + critic) | Terminus-2 · Harbor agent server | 4 × 8 H200 |
 | [inkling_grpo](examples/inkling_grpo/README.md) | Inkling-Small (276B MoE) | GRPO, full fine-tuning | CAMEL or Terminus-2 · Harbor agent server | 8 × 8 H200 |
 | [qwen3_8_27b_grpo](examples/qwen3_8_27b_grpo/README.md) | Qwen3.8-27B | GRPO, full fine-tuning, 128k context | Terminus-2 · Harbor agent server | 4 × 8 H200 |
 | [qwen3_8_27b_ppo](examples/qwen3_8_27b_ppo/README.md) | Qwen3.8-27B | PPO (actor + critic), full fine-tuning | Terminus-2 · Harbor agent server | 4 × 8 H200 |
